@@ -83,6 +83,10 @@ class ObjectBrowserPanel(QWidget):
         self._model.set_session(sid)
         self._update_actions()
 
+    def current_session_id(self) -> SessionId | None:
+        """Return the currently displayed session's id, or None."""
+        return self._session_id
+
     # ---- selection helper -----------------------------------------------
 
     def _selected_object(self) -> ObjectRef | None:

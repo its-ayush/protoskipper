@@ -282,11 +282,8 @@ class MainWindow(QMainWindow):
         self._session_manager.close_session(SessionId(session_id))
 
     def _currently_selected_session(self) -> str | None:
-        info = (
-            self._state.session(SessionId(self._object_browser._session_id))
-            if self._object_browser._session_id
-            else None
-        )
+        sid = self._object_browser.current_session_id()
+        info = self._state.session(sid) if sid else None
         return info.session_id if info else None
 
     # ---- panel selection forwarding --------------------------------------
