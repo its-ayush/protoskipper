@@ -8,10 +8,11 @@ shared without introducing cyclic imports.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Mapping, NewType
+from typing import NewType
 
 # A SessionId is just a wrapped UUID4 hex; it is not the underlying core
 # Session object reference. The GUI uses it as a stable handle that survives

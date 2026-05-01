@@ -31,7 +31,7 @@ GUI_GROUP = "protoskipper.gui_contributions"
 
 
 @lru_cache(maxsize=1)
-def load_protocol_drivers() -> dict[str, type["ProtocolDriver"]]:
+def load_protocol_drivers() -> dict[str, type[ProtocolDriver]]:
     """Return a dict of ``protocol_id -> driver class`` for every installed plugin.
 
     A plugin that fails to import is logged and skipped; one bad plugin must
@@ -89,7 +89,7 @@ def load_protocol_drivers() -> dict[str, type["ProtocolDriver"]]:
     return drivers
 
 
-def reload() -> dict[str, type["ProtocolDriver"]]:
+def reload() -> dict[str, type[ProtocolDriver]]:
     """Drop the cache and re-scan entry points. For developer use."""
     load_protocol_drivers.cache_clear()
     return load_protocol_drivers()
@@ -103,4 +103,4 @@ def _iter_entry_points(group: str) -> list[EntryPoint]:
     if hasattr(eps, "select"):
         return list(eps.select(group=group))
     # Python 3.9 fallback (we don't officially support but keep cheap)
-    return list(eps.get(group, []))  # type: ignore[union-attr]
+    return list(eps.get(group, []))  # pragma: no cover - Python 3.9 fallback

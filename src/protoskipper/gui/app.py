@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 
 def _configure_logging() -> None:
@@ -46,6 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     window = MainWindow()
     window.show()
+    window.raise_()
+    window.activateWindow()
     return int(app.exec())
 
 

@@ -7,7 +7,6 @@ being written. This is the panel the safety story relies on for visibility.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHeaderView,
     QTableWidget,

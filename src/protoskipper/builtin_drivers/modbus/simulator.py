@@ -94,4 +94,4 @@ if __name__ == "__main__":
     try:
         serve(args.host, args.port)
     except KeyboardInterrupt:
-        raise SystemExit(0)
+        raise SystemExit(0) from None

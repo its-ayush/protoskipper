@@ -23,7 +23,6 @@ from protoskipper.core.driver import (
     DeviceRef,
     ObjectRef,
     ProtocolDriver,
-    SafetyContext,
     SessionProfile,
     WriteIntent,
 )

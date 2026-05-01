@@ -1,9 +1,8 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd. Licensed under GPL-3.0-or-later.
-"""Unit-level checks on the Modbus driver: contract conformance and parsing.
+"""Unit-level checks on the Modbus driver: contract conformance + parsers.
 
-End-to-end Modbus tests against a simulator live under ``tests/integration/``
-once the simulator harness is wired up. These tests intentionally avoid
-opening sockets so they run fast and offline.
+End-to-end Modbus tests against a simulator live in ``tests/integration/``;
+these tests run fast and offline.
 """
 from __future__ import annotations
 
@@ -14,11 +13,20 @@ from protoskipper.builtin_drivers.modbus.driver import (
     DEFAULT_UNIT,
     ModbusRtuDriver,
     ModbusTcpDriver,
+    ProbeTarget,
+    RtuConfig,
     _parse_object_id,
     _parse_tcp_address,
+    parse_probe_target,
+    parse_rtu_address,
 )
 from protoskipper.core.driver import ProtocolDriver
-from protoskipper.core.errors import EncodingError, UnsupportedOperation
+from protoskipper.core.errors import ConnectionFailure, EncodingError
+
+
+# ---------------------------------------------------------------------------
+# ABC conformance
+# ---------------------------------------------------------------------------
 
 
 def test_modbus_tcp_driver_conforms_to_abc() -> None:
@@ -34,10 +42,19 @@ def test_modbus_rtu_driver_conforms_to_abc() -> None:
     assert drv.PROTOCOL_ID == "modbus.rtu"
 
 
-def test_modbus_rtu_connect_is_unsupported_for_now() -> None:
+def test_modbus_rtu_connect_fails_cleanly_on_missing_port() -> None:
+    """Connecting to a serial port that does not exist must raise
+    :class:`ConnectionFailure`, not a bare pyserial error or a generic
+    Exception. This is what the GUI catches to show 'could not open port'."""
     drv = ModbusRtuDriver()
-    with pytest.raises(UnsupportedOperation):
-        drv.connect(drv.parse_address("/dev/ttyUSB0/unit=1"), safety=None)  # type: ignore[arg-type]
+    device = drv.parse_address("/dev/this-port-does-not-exist@9600,N,1/unit=1")
+    with pytest.raises(ConnectionFailure):
+        drv.connect(device, safety=None)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Single-host TCP address parsing
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -56,6 +73,121 @@ def test_parse_tcp_address(address: str, expected: tuple[str, int, int]) -> None
 def test_parse_tcp_address_rejects_garbage() -> None:
     with pytest.raises(EncodingError):
         _parse_tcp_address("not an address")
+
+
+# ---------------------------------------------------------------------------
+# Probe-target parsing (CIDR, comma list, units range)
+# ---------------------------------------------------------------------------
+
+
+def test_probe_target_single_host() -> None:
+    pt = parse_probe_target("10.0.0.5")
+    assert pt.hosts == (("10.0.0.5", DEFAULT_TCP_PORT),)
+    assert pt.units == (DEFAULT_UNIT,)
+
+
+def test_probe_target_single_host_explicit_port_and_unit() -> None:
+    pt = parse_probe_target("10.0.0.5:1502/unit=7")
+    assert pt.hosts == (("10.0.0.5", 1502),)
+    assert pt.units == (7,)
+
+
+def test_probe_target_units_range() -> None:
+    pt = parse_probe_target("10.0.0.5/units=1-5")
+    assert pt.hosts == (("10.0.0.5", DEFAULT_TCP_PORT),)
+    assert pt.units == (1, 2, 3, 4, 5)
+
+
+def test_probe_target_units_single() -> None:
+    pt = parse_probe_target("10.0.0.5/units=3")
+    assert pt.units == (3,)
+
+
+def test_probe_target_cidr() -> None:
+    pt = parse_probe_target("10.0.0.0/30")
+    # /30 = 4 addresses, 2 usable hosts (.1 and .2) for IPv4
+    assert len(pt.hosts) == 2
+    assert all(h.startswith("10.0.0.") for h, _p in pt.hosts)
+
+
+def test_probe_target_cidr_with_port_and_units() -> None:
+    pt = parse_probe_target("192.168.1.0/30:1502/units=1-3")
+    assert all(p == 1502 for _h, p in pt.hosts)
+    assert pt.units == (1, 2, 3)
+
+
+def test_probe_target_comma_list() -> None:
+    pt = parse_probe_target("10.0.0.5,10.0.0.7,10.0.0.9")
+    hosts = [h for h, _p in pt.hosts]
+    assert hosts == ["10.0.0.5", "10.0.0.7", "10.0.0.9"]
+
+
+def test_probe_target_refuses_huge_cidr() -> None:
+    with pytest.raises(EncodingError, match="Refusing to probe"):
+        parse_probe_target("10.0.0.0/8")
+
+
+def test_probe_target_rejects_bad_units() -> None:
+    with pytest.raises(EncodingError):
+        parse_probe_target("10.0.0.5/units=200-10")  # lo > hi
+    with pytest.raises(EncodingError):
+        parse_probe_target("10.0.0.5/units=0-10")    # below 1
+
+
+def test_probe_target_rejects_empty() -> None:
+    with pytest.raises(EncodingError):
+        parse_probe_target("")
+
+
+# ---------------------------------------------------------------------------
+# RTU address parsing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "address,expected",
+    [
+        ("/dev/ttyUSB0", RtuConfig(port="/dev/ttyUSB0")),
+        ("COM3", RtuConfig(port="COM3")),
+        ("/dev/ttyUSB0@19200",
+         RtuConfig(port="/dev/ttyUSB0", baudrate=19200)),
+        ("/dev/ttyUSB0@9600,E",
+         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="E")),
+        ("/dev/ttyUSB0@9600,N,1/unit=3",
+         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N",
+                   stopbits=1, unit=3)),
+        ("/dev/ttyUSB0@9600,N,2/unit=15",
+         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N",
+                   stopbits=2, unit=15)),
+    ],
+)
+def test_parse_rtu_address(address: str, expected: RtuConfig) -> None:
+    got = parse_rtu_address(address)
+    assert got.port == expected.port
+    assert got.baudrate == expected.baudrate
+    assert got.parity == expected.parity
+    assert got.stopbits == expected.stopbits
+    assert got.unit == expected.unit
+
+
+def test_parse_rtu_address_units_range() -> None:
+    cfg = parse_rtu_address("/dev/ttyUSB0@9600,N,1/units=1-10")
+    assert cfg.units_range == tuple(range(1, 11))
+    assert cfg.unit == 1   # first of the range, used by connect() if called
+
+
+def test_parse_rtu_address_rejects_bad_input() -> None:
+    with pytest.raises(EncodingError):
+        parse_rtu_address("")
+    with pytest.raises(EncodingError):
+        parse_rtu_address("/dev/ttyUSB0@bad-baud")
+    with pytest.raises(EncodingError):
+        parse_rtu_address("/dev/ttyUSB0@9600,N,3")  # stopbits not in {1, 2}
+
+
+# ---------------------------------------------------------------------------
+# object_id parsing
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

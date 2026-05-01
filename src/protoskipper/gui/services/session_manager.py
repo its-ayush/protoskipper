@@ -14,20 +14,17 @@ This file has more wiring than logic; the logic lives in
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QMetaObject, QObject, Qt, QThread, Q_ARG
+from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread
 
 from protoskipper.core.driver import (
     DeviceRef,
     ObjectRef,
     ProtocolDriver,
-    ReadResult,
     SessionProfile,
     WriteIntent,
-    WriteResult,
 )
 from protoskipper.core.plugin_loader import load_protocol_drivers
 from protoskipper.gui.services.app_state import ApplicationState, SessionInfo
@@ -74,6 +71,67 @@ class SessionManager(QObject):
 
     def available_protocols(self) -> dict[str, type[ProtocolDriver]]:
         return load_protocol_drivers()
+
+    # ---- discovery (transient worker, no session) ------------------------
+
+    def start_discovery(self, protocol_id: str, target: str) -> SessionId:
+        """Spawn a transient discovery worker. Streams discovered devices into
+        :attr:`ApplicationState.device_discovered` and emits
+        :attr:`ApplicationState.discovery_finished` when done.
+
+        Returns a discovery_id that can be passed to :meth:`cancel_discovery`.
+        The worker is automatically torn down when discovery completes.
+        """
+        driver = self.driver_for(protocol_id)
+        discovery_id = new_session_id()
+
+        # Discovery never writes, so the confirm callback is a no-op deny.
+        def _no_writes(_intent, _profile) -> bool:  # pragma: no cover
+            return False
+
+        worker = DriverWorker(
+            driver=driver,
+            session_id=discovery_id,
+            confirm_callback=_no_writes,
+        )
+        thread = QThread()
+        worker.moveToThread(thread)
+
+        worker.discovery_progress.connect(
+            lambda device: self._state.record_device_discovered(device)
+        )
+        worker.discovery_finished.connect(
+            lambda count, pid=protocol_id, did=discovery_id:
+            self._on_discovery_finished(did, pid, count)
+        )
+        worker.error_raised.connect(
+            lambda op, msg: self._state.record_error(op, msg)
+        )
+
+        self._state.discovery_started.emit(protocol_id)
+        thread.start()
+        self._workers[discovery_id] = _WorkerHandle(worker=worker, thread=thread)
+
+        QMetaObject.invokeMethod(
+            worker, "start_discovery", Qt.QueuedConnection,
+            Q_ARG(str, target),
+        )
+        return discovery_id
+
+    def cancel_discovery(self, discovery_id: SessionId) -> None:
+        """Cooperatively cancel an in-flight discovery."""
+        handle = self._workers.get(discovery_id)
+        if handle is None:
+            return
+        QMetaObject.invokeMethod(handle.worker, "cancel", Qt.DirectConnection)
+
+    def _on_discovery_finished(
+        self, discovery_id: SessionId, protocol_id: str, count: int,
+    ) -> None:
+        self._state.discovery_finished.emit(protocol_id, count)
+        handle = self._workers.get(discovery_id)
+        if handle is not None:
+            self._teardown_thread(handle)
 
     # ---- session lifecycle ------------------------------------------------
 
@@ -125,7 +183,7 @@ class SessionManager(QObject):
             self._state.record_write_denied(sid, intent)
         )
         worker.closed.connect(
-            lambda sid=session_id: self._state.record_session_closed(sid)
+            lambda sid=session_id: self._on_worker_closed(sid)
         )
         worker.error_raised.connect(
             lambda op, msg, sid=session_id: self._on_worker_error(sid, op, msg)
@@ -149,10 +207,9 @@ class SessionManager(QObject):
         handle = self._workers.get(session_id)
         if handle is None:
             return
+        # The closed signal is already wired to _on_worker_closed in open_session;
+        # just queue the close slot and let that handler do teardown.
         QMetaObject.invokeMethod(handle.worker, "close", Qt.QueuedConnection)
-        # Stop the thread once the close slot has run. We connect lambda to
-        # closed signal so cleanup happens reliably.
-        handle.worker.closed.connect(lambda h=handle: self._teardown_thread(h))
 
     def cancel(self, session_id: SessionId) -> None:
         handle = self._workers.get(session_id)
@@ -195,32 +252,54 @@ class SessionManager(QObject):
         return handle
 
     def _on_worker_error(self, session_id: SessionId, operation: str, message: str) -> None:
-        # Specific path for failures during open(): translate to session_failed
-        # so the GUI can show "could not connect" rather than a generic banner.
+        # Failures during open(): translate to session_failed (shows a dialog).
+        # Failures during other operations: surface via error_raised (status bar).
         info = self._state.session(session_id)
         if info is None:
             self._state.record_session_failed(session_id, message)
-        self._state.record_error(operation, message)
+        else:
+            self._state.record_error(operation, message)
+
+    def _on_worker_closed(self, session_id: SessionId) -> None:
+        """Called when a session worker's closed signal fires (any thread)."""
+        self._state.record_session_closed(session_id)
+        handle = self._workers.get(session_id)
+        if handle is not None:
+            self._teardown_thread(handle)
 
     def _teardown_thread(self, handle: _WorkerHandle) -> None:
-        handle.thread.quit()
-        if not handle.thread.wait(5000):
-            _logger.warning("Worker thread did not exit within 5s; abandoning")
-        # Drop our reference; Qt will collect the worker and thread.
+        """Stop and clean up a worker thread. Safe to call from any thread."""
+        # Remove from registry first so no new requests arrive.
         for sid, h in list(self._workers.items()):
             if h is handle:
                 del self._workers[sid]
                 break
+        handle.thread.quit()
+        # Schedule deferred deletion via the finished signal — the canonical Qt
+        # pattern for worker-thread cleanup that is safe from any thread.
+        handle.thread.finished.connect(handle.worker.deleteLater)
+        handle.thread.finished.connect(handle.thread.deleteLater)
+        # Only call wait() from the main thread. Calling it from the worker
+        # thread itself raises QThread::wait: Thread tried to wait on itself.
+        if QThread.currentThread() is not handle.thread and not handle.thread.wait(5_000):
+            _logger.warning("Worker thread did not exit within 5s; abandoning")
 
     def shutdown(self) -> None:
-        """Close every open session - call from MainWindow.closeEvent()."""
-        for session_id in list(self._workers.keys()):
-            self.close_session(session_id)
+        """Synchronously stop all sessions. Called from MainWindow.closeEvent()."""
+        handles = list(self._workers.values())
+        for handle in handles:
+            # Cancel any blocking I/O (threading.Event.set() is thread-safe).
+            QMetaObject.invokeMethod(handle.worker, "cancel", Qt.DirectConnection)
+            handle.thread.quit()
+        self._workers.clear()
+        for handle in handles:
+            if not handle.thread.wait(3_000):
+                _logger.warning("Worker thread did not finish within 3s during shutdown")
 
 
 class _WorkerHandle:
     """Bundle of (worker, thread) so SessionManager can clean up reliably."""
-    __slots__ = ("worker", "thread")
+    __slots__ = ("thread", "worker")
 
     def __init__(self, worker: DriverWorker, thread: QThread) -> None:
         self.worker = worker

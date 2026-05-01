@@ -8,8 +8,8 @@ pull in the abstractions they need.
 
 from protoskipper.core.driver import (
     Access,
-    CaptureSink,
     Capturer,
+    CaptureSink,
     DeviceRef,
     DriverSession,
     ObjectRef,

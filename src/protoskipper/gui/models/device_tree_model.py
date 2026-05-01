@@ -32,7 +32,6 @@ from protoskipper.gui.services.app_state import ApplicationState, SessionInfo
 from protoskipper.gui.services.types import SessionId
 from protoskipper.gui.theme import active_theme
 
-
 # Custom roles - keep above Qt::UserRole.
 ROLE_NODE_KIND = Qt.UserRole + 1
 ROLE_PAYLOAD = Qt.UserRole + 2
@@ -48,8 +47,8 @@ class _Node:
     kind: str
     payload: Any
     label: str
-    parent: "_Node | None" = None
-    children: list["_Node"] = None  # type: ignore[assignment]
+    parent: _Node | None = None
+    children: list[_Node] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.children is None:

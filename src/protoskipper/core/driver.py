@@ -269,7 +269,7 @@ class ProtocolDriver(ABC):
         transport resources and must be closed via :meth:`DriverSession.close`
         (or used as a context manager)."""
 
-    def parse_address(self, address: str) -> DeviceRef:  # noqa: D401
+    def parse_address(self, address: str) -> DeviceRef:
         """Parse a user-typed address string into a :class:`DeviceRef`.
 
         Default implementation just stores the raw string. Drivers that want

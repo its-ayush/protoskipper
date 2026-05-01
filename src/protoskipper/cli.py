@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Sequence
+from collections.abc import Sequence
 
 from protoskipper import __version__
 
@@ -73,12 +73,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "scan":
-        cls = drivers.get(args.protocol)
-        if cls is None:
+        driver_cls = drivers.get(args.protocol)
+        if driver_cls is None:
             print(f"Unknown protocol '{args.protocol}'. Run `protoskipper list-protocols`.",
                   file=sys.stderr)
             return 2
-        driver = cls()
+        driver = driver_cls()
         for device in driver.discover(args.target):
             print(device)
         return 0

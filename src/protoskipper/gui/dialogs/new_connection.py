@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -153,6 +152,21 @@ class NewConnectionDialog(QDialog):
         if not self._operator_edit.text().strip():
             return
         self.accept()
+
+    # ---- pre-fill API (used by ProbeNetworkDialog handoff) --------------
+
+    def set_protocol(self, protocol_id: str) -> None:
+        """Pre-select a protocol by id. No-op if the id is not registered."""
+        for i in range(self._protocol_combo.count()):
+            if self._protocol_combo.itemData(i) == protocol_id:
+                self._protocol_combo.setCurrentIndex(i)
+                return
+
+    def set_address(self, address: str) -> None:
+        self._address_edit.setText(address)
+
+    def set_label(self, label: str) -> None:
+        self._label_edit.setText(label)
 
     # ---- public API ------------------------------------------------------
 

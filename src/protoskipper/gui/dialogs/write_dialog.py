@@ -71,8 +71,12 @@ class WriteDialog(QDialog):
 
         self._buttons = QDialogButtonBox(self)
         self._cancel = self._buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        self._next = self._buttons.addButton("Prepare write", QDialogButtonBox.ButtonRole.ActionRole)
-        self._confirm = self._buttons.addButton("Confirm write", QDialogButtonBox.ButtonRole.AcceptRole)
+        self._next = self._buttons.addButton(
+            "Prepare write", QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self._confirm = self._buttons.addButton(
+            "Confirm write", QDialogButtonBox.ButtonRole.AcceptRole,
+        )
         self._confirm.setVisible(False)
         layout.addWidget(self._buttons)
 

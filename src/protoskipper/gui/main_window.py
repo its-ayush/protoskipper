@@ -13,6 +13,7 @@ receive these through constructor injection.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 
@@ -26,13 +27,18 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QTabWidget,
     QToolBar,
-    QWidget,
 )
 
 from protoskipper import __version__
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
-from protoskipper.gui.dialogs import NewConnectionDialog, SafetyConfirmDialog, WriteDialog
+from protoskipper.gui.dialogs import (
+    NewConnectionDialog,
+    ProbeNetworkDialog,
+    ProbeSelection,
+    SafetyConfirmDialog,
+    WriteDialog,
+)
 from protoskipper.gui.panels import (
     DeviceTreePanel,
     ObjectBrowserPanel,
@@ -46,7 +52,6 @@ from protoskipper.gui.services import (
     SessionManager,
 )
 from protoskipper.gui.services.types import SessionId
-from protoskipper.gui.theme import active_theme
 
 _logger = logging.getLogger(__name__)
 
@@ -91,9 +96,13 @@ class MainWindow(QMainWindow):
     # ---- construction ---------------------------------------------------
 
     def _build_actions(self) -> None:
+        self._action_probe_network = QAction("Probe Network…", self)
+        self._action_probe_network.setShortcut("Ctrl+P")
+        self._action_probe_network.triggered.connect(self._open_probe_dialog)
+
         self._action_new_connection = QAction("New Connection…", self)
         self._action_new_connection.setShortcut(QKeySequence.StandardKey.New)
-        self._action_new_connection.triggered.connect(self._open_new_connection_dialog)
+        self._action_new_connection.triggered.connect(lambda: self._open_new_connection_dialog())
 
         self._action_disconnect = QAction("Disconnect Selected", self)
         self._action_disconnect.setEnabled(False)
@@ -109,6 +118,7 @@ class MainWindow(QMainWindow):
         # Menu bar
         menu = self.menuBar()
         file_menu = menu.addMenu("&File")
+        file_menu.addAction(self._action_probe_network)
         file_menu.addAction(self._action_new_connection)
         file_menu.addAction(self._action_disconnect)
         file_menu.addSeparator()
@@ -121,6 +131,7 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main", self)
         toolbar.setObjectName("MainToolbar")
         toolbar.setMovable(False)
+        toolbar.addAction(self._action_probe_network)
         toolbar.addAction(self._action_new_connection)
         toolbar.addAction(self._action_disconnect)
         toolbar.addSeparator()
@@ -142,7 +153,9 @@ class MainWindow(QMainWindow):
         dock_left = QDockWidget("Devices", self)
         dock_left.setObjectName("DeviceTreeDock")
         dock_left.setWidget(self._device_tree)
-        dock_left.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        dock_left.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_left)
 
         # ---- center: tabs (object browser / packet view) ----
@@ -161,14 +174,18 @@ class MainWindow(QMainWindow):
         dock_right_top = QDockWidget("Watchlist", self)
         dock_right_top.setObjectName("WatchlistDock")
         dock_right_top.setWidget(self._watchlist)
-        dock_right_top.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        dock_right_top.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_top)
 
         self._session_status = SessionStatusPanel(self._state, self)
         dock_right_bottom = QDockWidget("Sessions", self)
         dock_right_bottom.setObjectName("SessionStatusDock")
         dock_right_bottom.setWidget(self._session_status)
-        dock_right_bottom.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        dock_right_bottom.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_bottom)
 
     def _build_status_bar(self) -> None:
@@ -193,7 +210,25 @@ class MainWindow(QMainWindow):
 
     # ---- session management dispatch ------------------------------------
 
-    def _open_new_connection_dialog(self) -> None:
+    def _open_probe_dialog(self) -> None:
+        """Open the Probe Network dialog. If the operator picks a discovered
+        device, we hand off to a pre-filled New Connection dialog."""
+        if not load_protocol_drivers():
+            QMessageBox.warning(
+                self, "No protocol drivers",
+                "No protocol drivers are installed. Run `pip install "
+                "protoskipper[modbus]` and restart.",
+            )
+            return
+        dialog = ProbeNetworkDialog(self._state, self._session_manager, parent=self)
+        if dialog.exec() != ProbeNetworkDialog.Accepted:
+            return
+        sel = dialog.selection()
+        if sel is None:
+            return
+        self._open_new_connection_dialog(prefill=sel)
+
+    def _open_new_connection_dialog(self, prefill: ProbeSelection | None = None) -> None:
         if not load_protocol_drivers():
             QMessageBox.warning(
                 self, "No protocol drivers",
@@ -202,6 +237,11 @@ class MainWindow(QMainWindow):
             )
             return
         dialog = NewConnectionDialog(parent=self)
+        if prefill is not None:
+            dialog.set_protocol(prefill.protocol_id)
+            dialog.set_address(prefill.device.address)
+            if prefill.device.label:
+                dialog.set_label(prefill.device.label)
         if dialog.exec() != NewConnectionDialog.Accepted:
             return
         req = dialog.request()
@@ -295,14 +335,10 @@ class MainWindow(QMainWindow):
         try:
             accepted = dialog.exec() == WriteDialog.Accepted
         finally:
-            try:
+            with contextlib.suppress(TypeError, RuntimeError):
                 self._state.write_intent_prepared.disconnect(on_intent_prepared)
-            except (TypeError, RuntimeError):
-                pass
-            try:
+            with contextlib.suppress(TypeError, RuntimeError):
                 self._state.error_raised.disconnect(on_error)
-            except (TypeError, RuntimeError):
-                pass
 
         if accepted and dialog.intent() is not None:
             # The actual safety confirm dialog will run inside

@@ -187,7 +187,10 @@ def verify_log(db_path: Path) -> tuple[bool, str]:
         meta = dict(cur.execute("SELECT key, value FROM session_meta").fetchall())
         key_hex = meta.get("hmac_key_hex")
         if not key_hex:
-            return False, "session_meta is missing hmac_key_hex (session may not have closed cleanly)"
+            return False, (
+                "session_meta is missing hmac_key_hex"
+                " (session may not have closed cleanly)"
+            )
         key = bytes.fromhex(key_hex)
 
         prev_hash = b"\x00" * 32

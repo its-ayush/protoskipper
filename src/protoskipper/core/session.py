@@ -16,13 +16,13 @@ wrapper in production code paths.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from protoskipper.core.audit import AuditLog
 from protoskipper.core.driver import (
+    ConfirmCallback,
     DeviceRef,
     SafetyContext,
     SessionProfile,
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-ConfirmFn = Callable[[WriteIntent, SessionProfile], bool]
+ConfirmFn = ConfirmCallback
 
 
 def default_confirm(intent: WriteIntent, profile: SessionProfile) -> bool:
@@ -102,10 +102,13 @@ def open_session(
     audit_path = audit_dir / _audit_filename(device, operator)
     audit_log = AuditLog.create(audit_path, operator=operator, profile=profile.value)
 
+    def _audit_record(**fields: Any) -> None:
+        audit_log.record(**fields)
+
     safety = SafetyContext(
         profile=profile,
         confirm_callback=confirm,
-        audit_callback=lambda **fields: audit_log.record(**fields),
+        audit_callback=_audit_record,
     )
 
     audit_log.record(
