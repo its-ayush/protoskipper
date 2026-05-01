@@ -38,7 +38,14 @@ class Theme:
     direction_rx: QColor
 
     def quality_color(self, quality: Quality) -> QColor:
-        return _QUALITY_MAP[self][quality]
+        return {
+            Quality.GOOD: self.quality_good,
+            Quality.UNCERTAIN: self.quality_uncertain,
+            Quality.BAD: self.quality_bad,
+            Quality.TIMEOUT: self.quality_bad,
+            Quality.SIMULATED: self.quality_simulated,
+            Quality.UNKNOWN: self.quality_unknown,
+        }[quality]
 
     def profile_color(self, profile: SessionProfile) -> QColor:
         return {
@@ -76,26 +83,6 @@ DARK_THEME = Theme(
     direction_tx=QColor("#60a5fa"),
     direction_rx=QColor("#34d399"),
 )
-
-
-_QUALITY_MAP = {
-    LIGHT_THEME: {
-        Quality.GOOD: LIGHT_THEME.quality_good,
-        Quality.UNCERTAIN: LIGHT_THEME.quality_uncertain,
-        Quality.BAD: LIGHT_THEME.quality_bad,
-        Quality.TIMEOUT: LIGHT_THEME.quality_bad,
-        Quality.SIMULATED: LIGHT_THEME.quality_simulated,
-        Quality.UNKNOWN: LIGHT_THEME.quality_unknown,
-    },
-    DARK_THEME: {
-        Quality.GOOD: DARK_THEME.quality_good,
-        Quality.UNCERTAIN: DARK_THEME.quality_uncertain,
-        Quality.BAD: DARK_THEME.quality_bad,
-        Quality.TIMEOUT: DARK_THEME.quality_bad,
-        Quality.SIMULATED: DARK_THEME.quality_simulated,
-        Quality.UNKNOWN: DARK_THEME.quality_unknown,
-    },
-}
 
 
 _active = LIGHT_THEME

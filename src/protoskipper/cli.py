@@ -51,7 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "sim":
         if args.which == "modbus":
             # Local import: pymodbus is an optional dependency.
-            from tests.integration.modbus_simulator import serve
+            from protoskipper.builtin_drivers.modbus.simulator import serve
             serve(host=args.host, port=args.port)
             return 0
         parser.error(f"unknown simulator: {args.which}")
