@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 9 / 92 tasks complete (9.8%)**
+> **Overall Progress: 13 / 92 tasks complete (14.1%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -381,7 +381,7 @@ connect → read → write loop without a defect.
   * `test_probe_dialog_returns_none_on_close`
   * `test_probe_dialog_clears_results_on_new_scan`
 
-### P0.C.6 `WriteDialog` TextSelectableByMouse without QtCore
+### ✅ P0.C.6 `WriteDialog` TextSelectableByMouse without QtCore
 
 * **Goal:** `WriteDialog` and `SafetyConfirmDialog` use `Qt.TextSelectableByMouse`
   without re-importing `Qt` from the wrong namespace. Verify against
@@ -466,18 +466,18 @@ connect → read → write loop without a defect.
 
 ## P0.E — Documentation drift
 
-### P0.E.1 Update ARCHITECTURE.md to remove "future iteration" caveats now resolved
+### ✅ P0.E.1 Update ARCHITECTURE.md to remove "future iteration" caveats now resolved
 
 * **Goal:** The doc no longer claims `commit_write` is unaudited (P0.C.1 fixes that).
 * **Files touched:** `docs/ARCHITECTURE.md`.
 
-### P0.E.2 Add CHANGELOG.md
+### ✅ P0.E.2 Add CHANGELOG.md
 
 * **Files touched:** `CHANGELOG.md` (new).
 * **Acceptance criteria:** Conforms to Keep-a-Changelog format with
   `Unreleased`, `0.0.1` initial entry, and a row for every Phase-0 task.
 
-### P0.E.3 Add CODEOWNERS
+### ✅ P0.E.3 Add CODEOWNERS
 
 * **Files touched:** `.github/CODEOWNERS` (new). Maps `core/`, `gui/`,
   `builtin_drivers/`, `tests/` to specific maintainers.
