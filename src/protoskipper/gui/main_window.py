@@ -14,7 +14,6 @@ receive these through constructor injection.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from pathlib import Path
 
@@ -38,7 +37,6 @@ from protoskipper.gui.dialogs import (
     ProbeNetworkDialog,
     ProbeSelection,
     SafetyConfirmDialog,
-    WriteDialog,
 )
 from protoskipper.gui.panels import (
     DeviceTreePanel,
@@ -53,6 +51,7 @@ from protoskipper.gui.services import (
     SessionManager,
 )
 from protoskipper.gui.services.types import SessionId
+from protoskipper.gui.services.write_flow import WriteFlowController
 
 _logger = logging.getLogger(__name__)
 
@@ -82,6 +81,11 @@ class MainWindow(QMainWindow):
             state=self._state,
             confirm_handler=self._confirm_handler,
             audit_dir=self._audit_dir,
+            parent=self,
+        )
+        self._write_flow = WriteFlowController(
+            state=self._state,
+            session_manager=self._session_manager,
             parent=self,
         )
 
@@ -302,58 +306,7 @@ class MainWindow(QMainWindow):
     # ---- write flow -----------------------------------------------------
 
     def _open_write_dialog(self, session_id: str, ref: ObjectRef) -> None:
-        info = self._state.session(SessionId(session_id))
-        if info is None or not info.is_open:
-            return
-        last = info.last_values.get(ref.object_id)
-
-        dialog = WriteDialog(ref, info.profile, last_known=last, parent=self)
-
-        # Wire: when the operator clicks Prepare, dispatch prepare_write
-        # and wait for the worker's write_intent_prepared signal.
-        def on_intent_prepared(sid: str, intent: WriteIntent) -> None:
-            if sid != session_id:
-                return
-            if intent.object_ref.object_id != ref.object_id:
-                return
-            dialog.set_intent(intent)
-            self._state.write_intent_prepared.disconnect(on_intent_prepared)
-
-        def on_error(operation: str, message: str) -> None:
-            if operation != "prepare_write":
-                return
-            dialog.report_prepare_failed(message)
-
-        self._state.write_intent_prepared.connect(on_intent_prepared)
-        self._state.error_raised.connect(on_error)
-
-        # Dispatch prepare on Next click.
-        original_prepare = dialog._on_prepare_clicked
-
-        def prepare_dispatched():
-            original_prepare()
-            value = dialog.typed_value()
-            if value is None:
-                # Validation failed; original_prepare already showed the error.
-                return
-            self._session_manager.prepare_write(SessionId(session_id), ref, value)
-
-        dialog._next.clicked.disconnect(original_prepare)
-        dialog._next.clicked.connect(prepare_dispatched)
-
-        try:
-            accepted = dialog.exec() == WriteDialog.Accepted
-        finally:
-            with contextlib.suppress(TypeError, RuntimeError):
-                self._state.write_intent_prepared.disconnect(on_intent_prepared)
-            with contextlib.suppress(TypeError, RuntimeError):
-                self._state.error_raised.disconnect(on_error)
-
-        if accepted and dialog.intent() is not None:
-            # The actual safety confirm dialog will run inside
-            # commit_write via GuiConfirmHandler. The two-prompt design is
-            # intentional - this dispatch starts the chain.
-            self._session_manager.commit_write(SessionId(session_id), dialog.intent())
+        self._write_flow.start(session_id, ref)
 
     def _safety_dialog_factory(self, intent: WriteIntent, profile: SessionProfile):
         """Factory called by GuiConfirmHandler on the UI thread."""
