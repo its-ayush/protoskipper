@@ -1,5 +1,7 @@
 # ProtoSkipper — Production Execution Plan
 
+> **Overall Progress: 7 / 92 tasks complete (7.6%)**
+>
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
 > discrete, individually-verifiable task with explicit acceptance criteria
@@ -76,7 +78,7 @@ connect → read → write loop without a defect.
 
 ## P0.A — Tooling hygiene
 
-### P0.A.1 Pre-commit configuration
+### ✅ P0.A.1 Pre-commit configuration
 
 * **Goal:** Every commit on every developer's machine passes ruff + mypy
   + a fast pytest unit subset before the commit lands.
@@ -96,7 +98,7 @@ connect → read → write loop without a defect.
   * Manual: `tests/manual/m_pre_commit_blocks_bad_commit.md` — script that
     produces a deliberately-bad change and verifies the hook rejects it.
 
-### P0.A.2 GitHub Actions CI
+### ✅ P0.A.2 GitHub Actions CI
 
 * **Goal:** Every push and every PR runs lint, type-check, unit tests, and
   integration tests on Linux/Windows/macOS, Python 3.10/3.11/3.12.
@@ -117,7 +119,7 @@ connect → read → write loop without a defect.
   * Manual: open a PR with a deliberately failing test; verify the merge
     button is blocked.
 
-### P0.A.3 Coverage threshold + report
+### ✅ P0.A.3 Coverage threshold + report
 
 * **Goal:** Track unit-test coverage and prevent regressions.
 * **Files touched:** `pyproject.toml`, `.github/workflows/ci.yml`.
@@ -132,7 +134,7 @@ connect → read → write loop without a defect.
 * **Tests required:**
   * Tests previously passing still pass.
 
-### P0.A.4 Pin all developer-facing tool versions
+### ✅ P0.A.4 Pin all developer-facing tool versions
 
 * **Goal:** Eliminate "it works on my machine" by pinning ruff, mypy,
   pytest, and pre-commit to exact versions.
@@ -146,7 +148,7 @@ connect → read → write loop without a defect.
 
 ## P0.B — Test coverage gaps in existing code
 
-### P0.B.1 Unit tests for `plugin_loader`
+### ✅ P0.B.1 Unit tests for `plugin_loader`
 
 * **Goal:** The plugin discovery code is exercised by tests, including its
   failure modes (bad import, missing PROTOCOL_ID, mismatched key, duplicate).
@@ -265,7 +267,7 @@ connect → read → write loop without a defect.
 
 ## P0.C — Runtime correctness
 
-### P0.C.1 Audit log records committed writes
+### ✅ P0.C.1 Audit log records committed writes
 
 * **Goal:** `event="write_committed"` (success) and `event="write_failed"`
   (driver error) rows appear in the audit log alongside the existing
@@ -297,7 +299,7 @@ connect → read → write loop without a defect.
   * Update `tests/integration/test_modbus_tcp_session.py` to assert the
     full row sequence on a successful write.
 
-### P0.C.2 Drivers emit `frame_captured` for every TX/RX
+### ✅ P0.C.2 Drivers emit `frame_captured` for every TX/RX
 
 * **Goal:** The packet view receives real frames; `ApplicationState.
   frame_captured` is no longer a dead signal.
