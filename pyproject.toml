@@ -1,0 +1,128 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protoskipper"
+version = "0.0.1"
+description = "Open-source SCADA & BMS protocol testing, probing, and commissioning toolkit"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "DataSailors Pvt Ltd", email = "hello@datasailors.io" },
+]
+maintainers = [
+    { name = "DataSailors Pvt Ltd", email = "hello@datasailors.io" },
+]
+keywords = [
+    "scada", "bms", "modbus", "iec61850", "iec104", "bacnet",
+    "industrial-control", "ot", "substation", "automation",
+    "protocol-testing", "commissioning",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: System :: Hardware",
+]
+
+dependencies = [
+    # Core has no third-party deps beyond stdlib + a tiny crypto lib for audit signing.
+    # Protocol stacks are pulled in via optional extras so a user installing only the
+    # core (or a single protocol) doesn't have to drag in the rest.
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.6",
+]
+modbus = [
+    "pymodbus>=3.6",
+    "pyserial>=3.5",
+]
+iec104 = [
+    # placeholder — lib60870 cffi bindings come later
+]
+bacnet = [
+    "bacpypes3>=0.0.98",
+]
+iec61850 = [
+    "pyiec61850>=1.5.2a1; sys_platform == 'linux'",
+]
+all = [
+    "protoskipper[gui,modbus,iec104,bacnet,iec61850]",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "build>=1.2",
+]
+
+[project.scripts]
+protoskipper = "protoskipper.cli:main"
+protoskipper-gui = "protoskipper.gui.app:main"
+
+# ---------------------------------------------------------------------------
+# Plugin discovery: third-party protocol drivers register themselves here.
+#
+# A plugin package's own pyproject.toml declares, e.g.:
+#
+#     [project.entry-points."protoskipper.protocols"]
+#     dnp3 = "protoskipper_dnp3.driver:DNP3Driver"
+#
+# At startup, protoskipper.core.plugin_loader discovers every entry point
+# in the "protoskipper.protocols" group and registers the driver class.
+# Built-in drivers below use the same mechanism — there is no privileged
+# registration path, so a community plugin is a first-class citizen.
+# ---------------------------------------------------------------------------
+[project.entry-points."protoskipper.protocols"]
+"modbus.tcp" = "protoskipper.builtin_drivers.modbus.driver:ModbusTcpDriver"
+"modbus.rtu" = "protoskipper.builtin_drivers.modbus.driver:ModbusRtuDriver"
+
+# GUI panel contributions (per-protocol custom views) use a separate group
+# so a headless install never has to import Qt.
+[project.entry-points."protoskipper.gui_contributions"]
+# (populated by gui-aware plugins; built-in drivers ship their own contributions later)
+
+[project.urls]
+Homepage = "https://protoskipper.dev"
+Documentation = "https://protoskipper.dev/docs"
+Source = "https://github.com/datasailors/protoskipper"
+Issues = "https://github.com/datasailors/protoskipper/issues"
+Changelog = "https://github.com/datasailors/protoskipper/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+protoskipper = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+packages = ["protoskipper"]
