@@ -69,7 +69,7 @@ class SafetyConfirmDialog(QDialog):
         form.addRow("Description:", QLabel(intent.description))
         bytes_label = QLabel(_format_bytes(intent.encoded_bytes))
         bytes_label.setFont(QFont("monospace"))
-        bytes_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        bytes_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         form.addRow("Wire bytes:", bytes_label)
         layout.addWidget(intent_box)
 

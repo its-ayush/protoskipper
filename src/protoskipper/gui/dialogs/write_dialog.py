@@ -170,7 +170,9 @@ class WriteDialog(QDialog):
         self._intent_bytes_label = QLabel("")
         bytes_font = QFont("monospace")
         self._intent_bytes_label.setFont(bytes_font)
-        self._intent_bytes_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._intent_bytes_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
 
         v.addRow("Target:", self._intent_target_label)
         v.addRow("Value:", self._intent_value_label)
