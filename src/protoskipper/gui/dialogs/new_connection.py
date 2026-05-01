@@ -7,6 +7,7 @@ what they're committing to. The dialog is *display* only - it returns
 the operator's choices, and :class:`SessionManager` is responsible for
 actually opening the connection.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -122,12 +123,14 @@ class NewConnectionDialog(QDialog):
         profile_box = QGroupBox("Session profile")
         profile_layout = QVBoxLayout(profile_box)
         for profile in (
-            SessionProfile.LAB, SessionProfile.COMMISSIONING, SessionProfile.PRODUCTION,
+            SessionProfile.LAB,
+            SessionProfile.COMMISSIONING,
+            SessionProfile.PRODUCTION,
         ):
             profile_layout.addWidget(self._profile_radios[profile])
-        profile_layout.addWidget(QLabel(
-            "<i>Profile cannot be relaxed for the life of the session.</i>"
-        ))
+        profile_layout.addWidget(
+            QLabel("<i>Profile cannot be relaxed for the life of the session.</i>")
+        )
         outer.addWidget(profile_box)
 
         ops_form = QFormLayout()

@@ -14,6 +14,7 @@ privileged over community plugins.
 Discovery is cached per-process; call :func:`reload` to pick up plugins
 installed at runtime (developer scenarios, ``pip install -e .``).
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,7 +45,7 @@ def load_protocol_drivers() -> dict[str, type[ProtocolDriver]]:
     for ep in _iter_entry_points(PROTOCOL_GROUP):
         try:
             cls = ep.load()
-        except Exception:  # pragma: no cover - defensive
+        except Exception:
             _logger.exception("Failed to load protocol plugin %r (%s)", ep.name, ep.value)
             continue
 

@@ -6,6 +6,7 @@ polling against substation gear should be a deliberate operator choice
 configured per session, not the default. A polling timer lands as a
 follow-up.
 """
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import (

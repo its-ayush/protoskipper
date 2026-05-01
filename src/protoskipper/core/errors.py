@@ -5,6 +5,7 @@ All ProtoSkipper-originated errors derive from :class:`ProtoSkipperError`, so
 the GUI and CLI can catch one type and still distinguish causes via the
 specific subclasses.
 """
+
 from __future__ import annotations
 
 

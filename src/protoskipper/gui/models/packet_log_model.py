@@ -5,6 +5,7 @@ Captured frames flow into the model via :attr:`ApplicationState.frame_captured`.
 The model is bounded (default 10 000 rows); older rows are evicted FIFO.
 A bigger backlog is held by the per-session capture file (pcapng) on disk.
 """
+
 from __future__ import annotations
 
 from collections import deque
@@ -86,8 +87,9 @@ class PacketLogModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self.HEADERS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation,
-                   role: int = Qt.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
+    ) -> Any:
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.HEADERS[section]
         return None

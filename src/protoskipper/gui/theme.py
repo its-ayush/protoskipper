@@ -5,6 +5,7 @@ Themes are swappable; widgets must NOT hardcode colours. To add a theme,
 extend the :class:`Theme` constants and pick one in
 :func:`active_theme`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -57,14 +58,14 @@ class Theme:
 
 LIGHT_THEME = Theme(
     name="light",
-    quality_good=QColor("#1f2937"),       # near-black
+    quality_good=QColor("#1f2937"),  # near-black
     quality_uncertain=QColor("#b45309"),  # amber-700
-    quality_bad=QColor("#b91c1c"),        # red-700
+    quality_bad=QColor("#b91c1c"),  # red-700
     quality_simulated=QColor("#1d4ed8"),  # blue-700
-    quality_unknown=QColor("#6b7280"),    # gray-500
-    profile_lab=QColor("#16a34a"),        # green-600
+    quality_unknown=QColor("#6b7280"),  # gray-500
+    profile_lab=QColor("#16a34a"),  # green-600
     profile_commissioning=QColor("#d97706"),  # amber-600
-    profile_production=QColor("#dc2626"),     # red-600
+    profile_production=QColor("#dc2626"),  # red-600
     direction_tx=QColor("#1d4ed8"),
     direction_rx=QColor("#16a34a"),
 )

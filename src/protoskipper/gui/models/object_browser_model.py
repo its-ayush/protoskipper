@@ -4,6 +4,7 @@
 Shows the objects on the currently-focused session, plus the most recent
 read result for each.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -81,8 +82,9 @@ class ObjectBrowserModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self.HEADERS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation,
-                   role: int = Qt.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
+    ) -> Any:
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.HEADERS[section]
         return None

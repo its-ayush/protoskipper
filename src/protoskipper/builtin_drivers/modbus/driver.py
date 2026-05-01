@@ -30,6 +30,7 @@ encodings (float32, int64) callers should pass the right count.
 The pymodbus dependency is imported lazily so the core package remains
 importable on a minimal install.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -43,6 +44,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from protoskipper.core.driver import (
     Access,
+    CaptureSink,
     DeviceRef,
     DriverSession,
     ObjectRef,
@@ -82,6 +84,7 @@ def _detect_unit_kwarg() -> str:
         import inspect
 
         from pymodbus.client import ModbusTcpClient
+
         sig = inspect.signature(ModbusTcpClient.read_holding_registers)
         if "device_id" in sig.parameters:
             return "device_id"
@@ -153,7 +156,7 @@ def _parse_object_id(object_id: str) -> tuple[str, int, int]:
 class ProbeTarget:
     """Parsed probe specification: which hosts to probe and which units to try."""
 
-    hosts: tuple[tuple[str, int], ...]   # ((host, port), ...)
+    hosts: tuple[tuple[str, int], ...]  # ((host, port), ...)
     units: tuple[int, ...]
 
 
@@ -189,11 +192,11 @@ def parse_probe_target(spec: str) -> ProbeTarget:
     units: tuple[int, ...]
     m = re.search(r"/units=\d+(?:-\d+)?$", spec)
     if m:
-        units = _parse_units_range("/units=" + m.group()[len("/units="):])
+        units = _parse_units_range("/units=" + m.group()[len("/units=") :])
         spec = spec[: m.start()]
     elif re.search(r"/unit=\d+$", spec):
         m2 = re.search(r"/unit=\d+$", spec)
-        units = (int(m2.group()[len("/unit="):]),)
+        units = (int(m2.group()[len("/unit=") :]),)
         spec = spec[: m2.start()]
     else:
         units = (DEFAULT_UNIT,)
@@ -256,9 +259,7 @@ def _parse_units_range(suffix: str) -> tuple[int, ...]:
     lo = int(m.group("lo"))
     hi = int(m.group("hi") or lo)
     if not (1 <= lo <= 247) or not (1 <= hi <= 247) or lo > hi:
-        raise EncodingError(
-            f"Unit range out of bounds: {lo}-{hi} (must be 1-247, lo<=hi)"
-        )
+        raise EncodingError(f"Unit range out of bounds: {lo}-{hi} (must be 1-247, lo<=hi)")
     return tuple(range(lo, hi + 1))
 
 
@@ -308,8 +309,7 @@ def _identify(client: Any, unit: int) -> dict:
                 identifier = getattr(resp, "identifier", b"") or b""
                 if identifier:
                     metadata.setdefault("slave_id_blob_hex", identifier.hex())
-                metadata.setdefault("slave_id_status", bool(
-                    getattr(resp, "status", False)))
+                metadata.setdefault("slave_id_status", bool(getattr(resp, "status", False)))
     except Exception:  # pragma: no cover - vendor specific
         pass
 
@@ -362,15 +362,15 @@ class ModbusTcpDriver(ProtocolDriver):
         probe = parse_probe_target(target)
         _logger.info(
             "Modbus TCP probe: %d host(s), %d unit(s) per host (%d total points)",
-            len(probe.hosts), len(probe.units),
+            len(probe.hosts),
+            len(probe.units),
             len(probe.hosts) * len(probe.units),
         )
 
         max_workers = min(self._probe_workers, max(1, len(probe.hosts)))
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
-                ex.submit(_probe_tcp_host, host, port,
-                          probe.units, self._probe_timeout)
+                ex.submit(_probe_tcp_host, host, port, probe.units, self._probe_timeout)
                 for host, port in probe.hosts
             ]
             for fut in as_completed(futures):
@@ -382,10 +382,9 @@ class ModbusTcpDriver(ProtocolDriver):
                 yield from devices
 
     def connect(self, device: DeviceRef, safety: SafetyContext) -> DriverSession:
-        from pymodbus.client import ModbusTcpClient  # local import
         host, port, unit = _parse_tcp_address(device.address)
-        client = ModbusTcpClient(host=host, port=port, timeout=3.0)
-        if not client.connect():
+        client = _make_capturing_tcp_client(host=host, port=port, timeout=3.0)
+        if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open Modbus TCP socket to {host}:{port}")
         return _ModbusSession(client=client, unit=unit, device=device, safety=safety)
 
@@ -402,6 +401,7 @@ def _probe_tcp_host(
     cleanly with :class:`ThreadPoolExecutor` and is unit-testable.
     """
     from pymodbus.client import ModbusTcpClient
+
     found: list[DeviceRef] = []
     client: Any = None
     try:
@@ -416,21 +416,21 @@ def _probe_tcp_host(
             if getattr(resp, "isError", lambda: True)():
                 continue
             metadata = _identify(client, unit)
-            label = (
-                metadata.get("vendor_name")
-                or f"Modbus TCP @ {host}:{port}/unit={unit}"
+            label = metadata.get("vendor_name") or f"Modbus TCP @ {host}:{port}/unit={unit}"
+            found.append(
+                DeviceRef(
+                    protocol=ModbusTcpDriver.PROTOCOL_ID,
+                    address=f"{host}:{port}/unit={unit}",
+                    label=label,
+                    metadata=metadata,
+                )
             )
-            found.append(DeviceRef(
-                protocol=ModbusTcpDriver.PROTOCOL_ID,
-                address=f"{host}:{port}/unit={unit}",
-                label=label,
-                metadata=metadata,
-            ))
     except Exception as exc:
         _logger.debug("Modbus TCP probe %s:%d failed: %s", host, port, exc)
     finally:
         if client is not None:
             import contextlib
+
             with contextlib.suppress(Exception):  # pragma: no cover
                 client.close()
     return found
@@ -444,10 +444,11 @@ def _probe_tcp_host(
 @dataclass(frozen=True)
 class RtuConfig:
     """Parsed Modbus RTU serial configuration."""
+
     port: str
     baudrate: int = 9600
-    parity: str = "N"          # N / E / O
-    stopbits: int = 1          # 1 / 2
+    parity: str = "N"  # N / E / O
+    stopbits: int = 1  # 1 / 2
     bytesize: int = 8
     unit: int = DEFAULT_UNIT
     units_range: tuple[int, ...] = ()  # populated for /units=lo-hi probe specs
@@ -527,8 +528,13 @@ def parse_rtu_address(address: str) -> RtuConfig:
         raise EncodingError("Empty port path")
 
     return RtuConfig(
-        port=port, baudrate=baud, parity=parity, stopbits=stopbits,
-        bytesize=8, unit=unit, units_range=units_range,
+        port=port,
+        baudrate=baud,
+        parity=parity,
+        stopbits=stopbits,
+        bytesize=8,
+        unit=unit,
+        units_range=units_range,
     )
 
 
@@ -556,13 +562,20 @@ class ModbusRtuDriver(ProtocolDriver):
         units = cfg.units_range or tuple(range(1, 248))
         _logger.info(
             "Modbus RTU probe: %s @ %d,%s,%d - sweeping units %d..%d",
-            cfg.port, cfg.baudrate, cfg.parity, cfg.stopbits,
-            min(units), max(units),
+            cfg.port,
+            cfg.baudrate,
+            cfg.parity,
+            cfg.stopbits,
+            min(units),
+            max(units),
         )
 
         client = ModbusSerialClient(
-            port=cfg.port, baudrate=cfg.baudrate, parity=cfg.parity,
-            stopbits=cfg.stopbits, bytesize=cfg.bytesize,
+            port=cfg.port,
+            baudrate=cfg.baudrate,
+            parity=cfg.parity,
+            stopbits=cfg.stopbits,
+            bytesize=cfg.bytesize,
             timeout=self._probe_timeout,
         )
         if not client.connect():
@@ -572,43 +585,45 @@ class ModbusRtuDriver(ProtocolDriver):
             for unit in units:
                 try:
                     resp = client.read_holding_registers(
-                        address=0, count=1, **_u(unit),
+                        address=0,
+                        count=1,
+                        **_u(unit),
                     )
                 except Exception:
                     continue
                 if getattr(resp, "isError", lambda: True)():
                     continue
                 metadata = _identify(client, unit)
-                label = (
-                    metadata.get("vendor_name")
-                    or f"Modbus RTU @ {cfg.port} unit={unit}"
-                )
+                label = metadata.get("vendor_name") or f"Modbus RTU @ {cfg.port} unit={unit}"
                 yield DeviceRef(
                     protocol=self.PROTOCOL_ID,
-                    address=(
-                        f"{cfg.port}@{cfg.baudrate},{cfg.parity},{cfg.stopbits}"
-                        f"/unit={unit}"
-                    ),
+                    address=(f"{cfg.port}@{cfg.baudrate},{cfg.parity},{cfg.stopbits}/unit={unit}"),
                     label=label,
                     metadata=metadata,
                 )
         finally:
             import contextlib
+
             with contextlib.suppress(Exception):  # pragma: no cover
                 client.close()
 
     def connect(self, device: DeviceRef, safety: SafetyContext) -> DriverSession:
-        from pymodbus.client import ModbusSerialClient
-
         cfg = parse_rtu_address(device.address)
-        client = ModbusSerialClient(
-            port=cfg.port, baudrate=cfg.baudrate, parity=cfg.parity,
-            stopbits=cfg.stopbits, bytesize=cfg.bytesize, timeout=1.0,
+        client = _make_capturing_serial_client(
+            port=cfg.port,
+            baudrate=cfg.baudrate,
+            parity=cfg.parity,
+            stopbits=cfg.stopbits,
+            bytesize=cfg.bytesize,
+            timeout=1.0,
         )
-        if not client.connect():
+        if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open serial port {cfg.port}")
         return _ModbusSession(
-            client=client, unit=cfg.unit, device=device, safety=safety,
+            client=client,
+            unit=cfg.unit,
+            device=device,
+            safety=safety,
         )
 
     def parse_address(self, address: str) -> DeviceRef:
@@ -616,6 +631,104 @@ class ModbusRtuDriver(ProtocolDriver):
         # input before it ever creates a session.
         parse_rtu_address(address)
         return super().parse_address(address)
+
+
+# ---------------------------------------------------------------------------
+# Frame-capturing transport wrappers
+# ---------------------------------------------------------------------------
+
+
+class _CapturingMixin:
+    """Mixin that intercepts ``send`` / ``recv`` to feed a :class:`CaptureSink`.
+
+    Designed for cooperative multiple inheritance with pymodbus sync clients
+    (``ModbusTcpClient``, ``ModbusSerialClient``). The mixin stores a sink
+    reference and calls ``sink.write_frame`` with raw bytes on every I/O.
+    Frames are silently dropped when ``_capture_sink`` is ``None``.
+
+    **Thread safety**: ``_capture_sink`` is read in the worker thread and
+    set from the worker thread immediately after ``connect()``; there is no
+    concurrent access in normal operation. We intentionally avoid locking to
+    keep the hot path allocation-free.
+    """
+
+    _capture_sink: CaptureSink | None = None  # type: ignore[assignment]
+
+    def send(self, request: object, addr: tuple | None = None) -> int:  # type: ignore[override]
+        if self._capture_sink is not None and request:
+            try:
+                self._capture_sink.write_frame(
+                    datetime.now(timezone.utc),
+                    "tx",
+                    bytes(request),  # type: ignore[call-overload]
+                )
+            except Exception:  # pragma: no cover - sink errors must never kill I/O
+                _logger.debug("CaptureSink.write_frame (tx) raised", exc_info=True)
+        return super().send(request, addr)  # type: ignore[misc]
+
+    def recv(self, size: int | None) -> bytes:  # type: ignore[override]
+        data: bytes = super().recv(size)  # type: ignore[misc]
+        if self._capture_sink is not None and data:
+            try:
+                self._capture_sink.write_frame(
+                    datetime.now(timezone.utc),
+                    "rx",
+                    data,
+                )
+            except Exception:  # pragma: no cover - sink errors must never kill I/O
+                _logger.debug("CaptureSink.write_frame (rx) raised", exc_info=True)
+        return data
+
+
+class _CapturingTcpClient(_CapturingMixin):
+    """ModbusTcpClient subclass that captures raw TX/RX bytes.
+
+    The lazy import is deferred to first use so the core package stays
+    importable on a minimal install (pymodbus is optional). The class is
+    built once and cached so the import overhead is paid once.
+    """
+
+
+class _CapturingSerialClient(_CapturingMixin):
+    """ModbusSerialClient subclass that captures raw TX/RX bytes."""
+
+
+def _make_capturing_tcp_client(host: str, port: int, timeout: float) -> _CapturingMixin:
+    """Return a capturing TCP client (lazy-imports ModbusTcpClient)."""
+    from pymodbus.client import ModbusTcpClient
+
+    cls = type(
+        "_CapturingTcpClientImpl",
+        (_CapturingMixin, ModbusTcpClient),
+        {},
+    )
+    return cls(host=host, port=port, timeout=timeout)  # type: ignore[call-arg]
+
+
+def _make_capturing_serial_client(
+    port: str,
+    baudrate: int,
+    parity: str,
+    stopbits: int,
+    bytesize: int,
+    timeout: float,
+) -> _CapturingMixin:
+    """Return a capturing serial client (lazy-imports ModbusSerialClient)."""
+    from pymodbus.client import ModbusSerialClient
+
+    cls = type(
+        "_CapturingSerialClientImpl",
+        (_CapturingMixin, ModbusSerialClient),
+        {},
+    )
+    return cls(  # type: ignore[call-arg]
+        port=port,
+        baudrate=baudrate,
+        parity=parity,
+        stopbits=stopbits,
+        bytesize=bytesize,
+        timeout=timeout,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +756,13 @@ class _ModbusSession(DriverSession):
         self._unit = unit
         self.device = device
         self.safety = safety
+
+    def attach_frame_sink(self, sink: CaptureSink | None) -> None:
+        """Override: store sink and wire it into the capturing transport."""
+        self._frame_sink = sink
+        # _CapturingMixin exposes _capture_sink; plain clients just ignore this.
+        if isinstance(self._client, _CapturingMixin):
+            self._client._capture_sink = sink
 
     # -- enumerate --------------------------------------------------------
     def enumerate_objects(self) -> Iterator[ObjectRef]:
@@ -693,14 +813,20 @@ class _ModbusSession(DriverSession):
         except Exception as exc:
             _logger.warning("Modbus read failed for %s: %s", ref.object_id, exc)
             return ReadResult(
-                object_ref=ref, value=None, quality=Quality.BAD,
-                timestamp=ts, error=repr(exc),
+                object_ref=ref,
+                value=None,
+                quality=Quality.BAD,
+                timestamp=ts,
+                error=repr(exc),
             )
 
         if resp.isError():
             return ReadResult(
-                object_ref=ref, value=None, quality=Quality.BAD,
-                timestamp=ts, error=str(resp),
+                object_ref=ref,
+                value=None,
+                quality=Quality.BAD,
+                timestamp=ts,
+                error=str(resp),
             )
 
         value: Any
@@ -712,8 +838,11 @@ class _ModbusSession(DriverSession):
             value = value[0] if count == 1 else value
 
         return ReadResult(
-            object_ref=ref, value=value, quality=Quality.GOOD,
-            timestamp=ts, raw_bytes=None,
+            object_ref=ref,
+            value=value,
+            quality=Quality.GOOD,
+            timestamp=ts,
+            raw_bytes=None,
         )
 
     # -- write ------------------------------------------------------------
@@ -740,8 +869,10 @@ class _ModbusSession(DriverSession):
             raise EncodingError(f"Cannot encode {value!r} for {ref.object_id}: {exc}") from exc
 
         return WriteIntent(
-            object_ref=ref, requested_value=value,
-            encoded_bytes=encoded, description=description,
+            object_ref=ref,
+            requested_value=value,
+            encoded_bytes=encoded,
+            description=description,
             metadata={"unit_id": self._unit, "table": table, "address": address},
         )
 
@@ -764,12 +895,18 @@ class _ModbusSession(DriverSession):
                 bool_value = intent.encoded_bytes == b"\xff\x00"
                 resp = self._client.write_coil(address=address, value=bool_value, **unit)
         except Exception as exc:
-            return WriteResult(intent=intent, success=False, timestamp=ts, error=repr(exc))
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error=repr(exc))
+            self.safety.record_write_outcome(result)
+            return result
 
         if resp.isError():
-            return WriteResult(intent=intent, success=False, timestamp=ts, error=str(resp))
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error=str(resp))
+            self.safety.record_write_outcome(result)
+            return result
 
-        return WriteResult(intent=intent, success=True, timestamp=ts)
+        result = WriteResult(intent=intent, success=True, timestamp=ts)
+        self.safety.record_write_outcome(result)
+        return result
 
     def close(self) -> None:
         try:

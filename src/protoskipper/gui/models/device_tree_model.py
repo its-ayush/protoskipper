@@ -18,6 +18,7 @@ Items expose a UserRole carrying the underlying object (a string protocol
 id, a DeviceRef, a SessionInfo, or an ObjectRef) so panels can react to
 selection without re-inferring the type from the display string.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -80,8 +81,7 @@ class DeviceTreeModel(QAbstractItemModel):
         """Add a child of root for every loaded protocol driver."""
         for protocol_id, cls in sorted(load_protocol_drivers().items()):
             label = getattr(cls, "DISPLAY_NAME", protocol_id)
-            node = _Node(kind=KIND_PROTOCOL, payload=protocol_id,
-                         label=label, parent=self._root)
+            node = _Node(kind=KIND_PROTOCOL, payload=protocol_id, label=label, parent=self._root)
             self._root.children.append(node)
             self._protocol_nodes[protocol_id] = node
 
@@ -105,8 +105,7 @@ class DeviceTreeModel(QAbstractItemModel):
         parent_index = self._index_of(proto_node)
         row = len(proto_node.children)
         self.beginInsertRows(parent_index, row, row)
-        node = _Node(kind=KIND_DEVICE, payload=device,
-                     label=str(device), parent=proto_node)
+        node = _Node(kind=KIND_DEVICE, payload=device, label=str(device), parent=proto_node)
         proto_node.children.append(node)
         self._device_nodes[key] = node
         self.endInsertRows()
@@ -129,7 +128,8 @@ class DeviceTreeModel(QAbstractItemModel):
         row = len(proto_node.children)
         self.beginInsertRows(parent_index, row, row)
         node = _Node(
-            kind=KIND_SESSION, payload=info,
+            kind=KIND_SESSION,
+            payload=info,
             label=f"{device.label or device.address}  [{profile.value.upper()}]",
             parent=proto_node,
         )
@@ -159,7 +159,8 @@ class DeviceTreeModel(QAbstractItemModel):
             self.beginInsertRows(parent_index, 0, len(objects) - 1)
             for obj in objects:
                 child = _Node(
-                    kind=KIND_OBJECT, payload=obj,
+                    kind=KIND_OBJECT,
+                    payload=obj,
                     label=f"{obj.label or obj.object_id}  ({obj.data_type})",
                     parent=node,
                 )
@@ -224,18 +225,23 @@ class DeviceTreeModel(QAbstractItemModel):
             if node.kind == KIND_SESSION:
                 info = node.payload
                 if isinstance(info, SessionInfo):
-                    return (f"Session {info.session_id}\n"
-                            f"Profile: {info.profile.value}\n"
-                            f"Operator: {info.operator}")
+                    return (
+                        f"Session {info.session_id}\n"
+                        f"Profile: {info.profile.value}\n"
+                        f"Operator: {info.operator}"
+                    )
             if node.kind == KIND_OBJECT:
                 obj = node.payload
-                return (f"{obj.object_id}\n"
-                        f"Type: {obj.data_type}, Access: {obj.access.value}\n"
-                        f"Unit: {obj.unit or '(none)'}")
+                return (
+                    f"{obj.object_id}\n"
+                    f"Type: {obj.data_type}, Access: {obj.access.value}\n"
+                    f"Unit: {obj.unit or '(none)'}"
+                )
         return None
 
-    def headerData(self, section: int, orientation: Qt.Orientation,
-                   role: int = Qt.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
+    ) -> Any:
         if orientation == Qt.Horizontal and role == Qt.DisplayRole and section == 0:
             return "Devices"
         return None

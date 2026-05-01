@@ -5,6 +5,7 @@ The CLI is intentionally thin: most user interaction happens through the GUI
 (``protoskipper-gui``) or the embedded scripting REPL. The CLI exists for
 headless automation, CI integrations, and quick scans from a terminal.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,6 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.which == "modbus":
             # Local import: pymodbus is an optional dependency.
             from protoskipper.builtin_drivers.modbus.simulator import serve
+
             serve(host=args.host, port=args.port)
             return 0
         parser.error(f"unknown simulator: {args.which}")
@@ -75,8 +77,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "scan":
         driver_cls = drivers.get(args.protocol)
         if driver_cls is None:
-            print(f"Unknown protocol '{args.protocol}'. Run `protoskipper list-protocols`.",
-                  file=sys.stderr)
+            print(
+                f"Unknown protocol '{args.protocol}'. Run `protoskipper list-protocols`.",
+                file=sys.stderr,
+            )
             return 2
         driver = driver_cls()
         for device in driver.discover(args.target):

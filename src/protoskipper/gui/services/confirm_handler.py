@@ -9,6 +9,7 @@ implement this with a Qt signal that traverses the thread boundary plus a
 This is the only place in the GUI where we deliberately block a non-UI
 thread on UI input. The block is bounded by a configurable timeout.
 """
+
 from __future__ import annotations
 
 import logging
@@ -44,8 +45,11 @@ class GuiConfirmHandler(QObject):
     confirm_requested = Signal(WriteIntent, object, object)
     # Args: intent, profile, callback(bool) -> None
 
-    def __init__(self, dialog_factory: Callable[[WriteIntent, SessionProfile], Any],
-                 parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        dialog_factory: Callable[[WriteIntent, SessionProfile], Any],
+        parent: QObject | None = None,
+    ) -> None:
         super().__init__(parent)
         self._dialog_factory = dialog_factory
         self.confirm_requested.connect(self._handle_request, Qt.QueuedConnection)
@@ -92,7 +96,8 @@ class GuiConfirmHandler(QObject):
             if not event.wait(timeout=timeout_s):
                 _logger.warning(
                     "Confirmation timed out after %.1fs for write to %s; treating as denial.",
-                    timeout_s, intent.object_ref.object_id,
+                    timeout_s,
+                    intent.object_ref.object_id,
                 )
                 return False
             return answer_box[0] if answer_box else False

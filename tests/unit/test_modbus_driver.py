@@ -4,6 +4,7 @@
 End-to-end Modbus tests against a simulator live in ``tests/integration/``;
 these tests run fast and offline.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +14,6 @@ from protoskipper.builtin_drivers.modbus.driver import (
     DEFAULT_UNIT,
     ModbusRtuDriver,
     ModbusTcpDriver,
-    ProbeTarget,
     RtuConfig,
     _parse_object_id,
     _parse_tcp_address,
@@ -22,7 +22,6 @@ from protoskipper.builtin_drivers.modbus.driver import (
 )
 from protoskipper.core.driver import ProtocolDriver
 from protoskipper.core.errors import ConnectionFailure, EncodingError
-
 
 # ---------------------------------------------------------------------------
 # ABC conformance
@@ -131,7 +130,7 @@ def test_probe_target_rejects_bad_units() -> None:
     with pytest.raises(EncodingError):
         parse_probe_target("10.0.0.5/units=200-10")  # lo > hi
     with pytest.raises(EncodingError):
-        parse_probe_target("10.0.0.5/units=0-10")    # below 1
+        parse_probe_target("10.0.0.5/units=0-10")  # below 1
 
 
 def test_probe_target_rejects_empty() -> None:
@@ -149,16 +148,16 @@ def test_probe_target_rejects_empty() -> None:
     [
         ("/dev/ttyUSB0", RtuConfig(port="/dev/ttyUSB0")),
         ("COM3", RtuConfig(port="COM3")),
-        ("/dev/ttyUSB0@19200",
-         RtuConfig(port="/dev/ttyUSB0", baudrate=19200)),
-        ("/dev/ttyUSB0@9600,E",
-         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="E")),
-        ("/dev/ttyUSB0@9600,N,1/unit=3",
-         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N",
-                   stopbits=1, unit=3)),
-        ("/dev/ttyUSB0@9600,N,2/unit=15",
-         RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N",
-                   stopbits=2, unit=15)),
+        ("/dev/ttyUSB0@19200", RtuConfig(port="/dev/ttyUSB0", baudrate=19200)),
+        ("/dev/ttyUSB0@9600,E", RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="E")),
+        (
+            "/dev/ttyUSB0@9600,N,1/unit=3",
+            RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N", stopbits=1, unit=3),
+        ),
+        (
+            "/dev/ttyUSB0@9600,N,2/unit=15",
+            RtuConfig(port="/dev/ttyUSB0", baudrate=9600, parity="N", stopbits=2, unit=15),
+        ),
     ],
 )
 def test_parse_rtu_address(address: str, expected: RtuConfig) -> None:
@@ -173,7 +172,7 @@ def test_parse_rtu_address(address: str, expected: RtuConfig) -> None:
 def test_parse_rtu_address_units_range() -> None:
     cfg = parse_rtu_address("/dev/ttyUSB0@9600,N,1/units=1-10")
     assert cfg.units_range == tuple(range(1, 11))
-    assert cfg.unit == 1   # first of the range, used by connect() if called
+    assert cfg.unit == 1  # first of the range, used by connect() if called
 
 
 def test_parse_rtu_address_rejects_bad_input() -> None:

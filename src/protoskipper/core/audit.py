@@ -21,6 +21,7 @@ key). What it provides is a chain that, once a session is closed and the
 key is rotated/discarded, cannot be retroactively edited without breaking
 the hash chain — so any deletion or modification leaves evidence.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -188,16 +189,17 @@ def verify_log(db_path: Path) -> tuple[bool, str]:
         key_hex = meta.get("hmac_key_hex")
         if not key_hex:
             return False, (
-                "session_meta is missing hmac_key_hex"
-                " (session may not have closed cleanly)"
+                "session_meta is missing hmac_key_hex (session may not have closed cleanly)"
             )
         key = bytes.fromhex(key_hex)
 
         prev_hash = b"\x00" * 32
-        rows = list(cur.execute(
-            "SELECT seq, ts_utc, event, payload, prev_hash, row_hmac "
-            "FROM audit_log ORDER BY seq ASC"
-        ))
+        rows = list(
+            cur.execute(
+                "SELECT seq, ts_utc, event, payload, prev_hash, row_hmac "
+                "FROM audit_log ORDER BY seq ASC"
+            )
+        )
 
         for seq, ts, event, payload, prev_hash_hex, row_hmac_hex in rows:
             if prev_hash_hex != prev_hash.hex():

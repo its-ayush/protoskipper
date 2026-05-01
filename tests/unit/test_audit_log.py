@@ -4,6 +4,7 @@
 Tampering is detected by the verify_log helper; these tests confirm that
 clean logs verify cleanly, and that an in-place edit is caught.
 """
+
 from __future__ import annotations
 
 import sqlite3

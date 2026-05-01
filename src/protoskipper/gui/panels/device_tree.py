@@ -6,6 +6,7 @@ objects on each session. Selection drives the rest of the application:
 the object browser shows the selected session's objects, the packet view
 filters by the selected session, etc.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
@@ -67,9 +68,7 @@ class DeviceTreePanel(QWidget):
 
         # Auto-expand newly inserted rows so the user does not have to dig
         # into each protocol after every discovery / connect.
-        self._model.rowsInserted.connect(
-            lambda parent, _first, _last: self._view.expand(parent)
-        )
+        self._model.rowsInserted.connect(lambda parent, _first, _last: self._view.expand(parent))
 
     # ---- selection -------------------------------------------------------
 
@@ -108,8 +107,7 @@ class DeviceTreePanel(QWidget):
         if kind == KIND_SESSION and isinstance(payload, SessionInfo):
             disconnect_action = QAction("Disconnect", self)
             disconnect_action.triggered.connect(
-                lambda _checked=False, sid=payload.session_id:
-                self.disconnect_requested.emit(sid)
+                lambda _checked=False, sid=payload.session_id: self.disconnect_requested.emit(sid)
             )
             disconnect_action.setEnabled(payload.is_open)
             menu.addAction(disconnect_action)
@@ -119,16 +117,18 @@ class DeviceTreePanel(QWidget):
             if session_info is not None:
                 read_action = QAction("Read now", self)
                 read_action.triggered.connect(
-                    lambda _checked=False, sid=session_info.session_id, ref=payload:
-                    self._session_manager.read(SessionId(sid), ref)
+                    lambda _checked=False, sid=session_info.session_id, ref=payload: (
+                        self._session_manager.read(SessionId(sid), ref)
+                    )
                 )
                 menu.addAction(read_action)
 
                 write_action = QAction("Write…", self)
                 write_action.setEnabled(payload.access.value != "ro")
                 write_action.triggered.connect(
-                    lambda _checked=False, sid=session_info.session_id, ref=payload:
-                    self.write_requested.emit(sid, ref)
+                    lambda _checked=False, sid=session_info.session_id, ref=payload: (
+                        self.write_requested.emit(sid, ref)
+                    )
                 )
                 menu.addAction(write_action)
 
@@ -136,8 +136,9 @@ class DeviceTreePanel(QWidget):
 
                 watch_action = QAction("Add to Watchlist", self)
                 watch_action.triggered.connect(
-                    lambda _checked=False, sid=session_info.session_id, ref=payload:
-                    self.add_to_watchlist_requested.emit(sid, ref)
+                    lambda _checked=False, sid=session_info.session_id, ref=payload: (
+                        self.add_to_watchlist_requested.emit(sid, ref)
+                    )
                 )
                 menu.addAction(watch_action)
 

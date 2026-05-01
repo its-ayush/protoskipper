@@ -6,6 +6,7 @@ lifetime of the test, and tear it down cleanly afterwards. They never
 share simulator instances across tests so each test starts with a known
 state.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,8 +31,9 @@ def _free_port() -> int:
 
 def _start_simulator_on_port(port: int) -> threading.Thread:
     """Start the bundled simulator on ``localhost:port`` in a daemon thread."""
-    from protoskipper.builtin_drivers.modbus.simulator import build_datastore
     from pymodbus.datastore import ModbusServerContext
+
+    from protoskipper.builtin_drivers.modbus.simulator import build_datastore
 
     try:
         ctx = ModbusServerContext(devices=build_datastore(), single=True)
@@ -40,6 +42,7 @@ def _start_simulator_on_port(port: int) -> threading.Thread:
 
     async def _serve() -> None:
         from pymodbus.server import StartAsyncTcpServer
+
         await StartAsyncTcpServer(context=ctx, address=("127.0.0.1", port))
 
     thread = threading.Thread(target=lambda: asyncio.run(_serve()), daemon=True)

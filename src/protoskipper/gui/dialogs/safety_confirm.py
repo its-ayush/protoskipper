@@ -11,6 +11,7 @@ than user -> dialog -> driver).
 The two dialogs share a layout so operators recognise the moment of
 authorisation regardless of which path got them here.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -62,9 +63,9 @@ class SafetyConfirmDialog(QDialog):
 
         intent_box = QGroupBox("Write intent")
         form = QFormLayout(intent_box)
-        form.addRow("Target:", QLabel(
-            f"{intent.object_ref.device}  |  {intent.object_ref.object_id}"
-        ))
+        form.addRow(
+            "Target:", QLabel(f"{intent.object_ref.device}  |  {intent.object_ref.object_id}")
+        )
         form.addRow("Description:", QLabel(intent.description))
         bytes_label = QLabel(_format_bytes(intent.encoded_bytes))
         bytes_label.setFont(QFont("monospace"))
@@ -76,17 +77,14 @@ class SafetyConfirmDialog(QDialog):
         if profile == SessionProfile.PRODUCTION:
             tag_box = QGroupBox("Production confirmation")
             tag_layout = QFormLayout(tag_box)
-            tag_layout.addRow(QLabel(
-                "Type the tag name to authorise this write."
-            ))
+            tag_layout.addRow(QLabel("Type the tag name to authorise this write."))
             self._typed_tag_edit = QLineEdit(self)
             self._typed_tag_edit.textChanged.connect(self._update_buttons)
             tag_layout.addRow("Tag:", self._typed_tag_edit)
             layout.addWidget(tag_box)
 
         self._buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Cancel
-            | QDialogButtonBox.StandardButton.Yes,
+            QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Yes,
             parent=self,
         )
         yes_btn = self._buttons.button(QDialogButtonBox.StandardButton.Yes)

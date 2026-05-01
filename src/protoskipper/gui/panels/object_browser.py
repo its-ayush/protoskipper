@@ -5,6 +5,7 @@ Bound to whichever session is selected in the device tree. Provides the
 "Read" and "Write…" actions on the toolbar, plus an "Add to Watchlist"
 shortcut on the selected row.
 """
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
@@ -55,8 +56,12 @@ class ObjectBrowserPanel(QWidget):
         self._read_all_button = QPushButton("Read all", self)
         self._write_button = QPushButton("Write…", self)
         self._watch_button = QPushButton("Add to Watchlist", self)
-        for btn in (self._read_button, self._read_all_button,
-                    self._write_button, self._watch_button):
+        for btn in (
+            self._read_button,
+            self._read_all_button,
+            self._write_button,
+            self._watch_button,
+        ):
             self._toolbar.addWidget(btn)
 
         self._read_button.clicked.connect(self._on_read_clicked)

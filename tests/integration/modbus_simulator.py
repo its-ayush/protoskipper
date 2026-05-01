@@ -19,6 +19,7 @@ distinguishable test values.
 This is also used as a pytest fixture by the integration tests; running it
 manually is the same code path with a longer-running event loop.
 """
+
 from __future__ import annotations
 
 # Re-export from the canonical package location so the test suite's
@@ -39,15 +40,16 @@ if __name__ == "__main__":
         prog="modbus_simulator",
         description="Modbus TCP slave for testing ProtoSkipper without real hardware.",
     )
-    parser.add_argument("--host", default=DEFAULT_HOST,
-                        help=f"Bind address (default: {DEFAULT_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"Bind port (default: {DEFAULT_PORT})")
+    parser.add_argument(
+        "--host", default=DEFAULT_HOST, help=f"Bind address (default: {DEFAULT_HOST})"
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default: {DEFAULT_PORT})"
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     try:
         serve(args.host, args.port)
     except KeyboardInterrupt:
-        raise SystemExit(0)
+        raise SystemExit(0) from None

@@ -16,6 +16,7 @@ Splitting the two phases is what lets the operator see real bytes
 transmission. It is the architectural feature the audit story is built
 on.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -72,10 +73,12 @@ class WriteDialog(QDialog):
         self._buttons = QDialogButtonBox(self)
         self._cancel = self._buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         self._next = self._buttons.addButton(
-            "Prepare write", QDialogButtonBox.ButtonRole.ActionRole,
+            "Prepare write",
+            QDialogButtonBox.ButtonRole.ActionRole,
         )
         self._confirm = self._buttons.addButton(
-            "Confirm write", QDialogButtonBox.ButtonRole.AcceptRole,
+            "Confirm write",
+            QDialogButtonBox.ButtonRole.AcceptRole,
         )
         self._confirm.setVisible(False)
         layout.addWidget(self._buttons)
@@ -91,7 +94,9 @@ class WriteDialog(QDialog):
     # ---- prepare page ----------------------------------------------------
 
     def _build_prepare_page(
-        self, ref: ObjectRef, last_known: ReadResult | None,
+        self,
+        ref: ObjectRef,
+        last_known: ReadResult | None,
     ) -> QWidget:
         page = QWidget(self)
         layout = QVBoxLayout(page)
@@ -104,8 +109,9 @@ class WriteDialog(QDialog):
         form.addRow("Unit:", QLabel(ref.unit or "(none)"))
         form.addRow("Access:", QLabel(ref.access.value))
         if last_known is not None:
-            form.addRow("Current value:",
-                        QLabel(f"{last_known.value}  ({last_known.quality.value})"))
+            form.addRow(
+                "Current value:", QLabel(f"{last_known.value}  ({last_known.quality.value})")
+            )
         layout.addWidget(info)
 
         value_box = QGroupBox("New value")
@@ -176,9 +182,7 @@ class WriteDialog(QDialog):
         if self._profile == SessionProfile.PRODUCTION:
             tag_box = QGroupBox("Production confirmation")
             tag_layout = QFormLayout(tag_box)
-            tag_layout.addRow(QLabel(
-                "Type the tag name shown above to authorise this write."
-            ))
+            tag_layout.addRow(QLabel("Type the tag name shown above to authorise this write."))
             self._typed_tag_edit = QLineEdit(page)
             self._typed_tag_edit.textChanged.connect(self._update_confirm_enabled)
             tag_layout.addRow("Tag:", self._typed_tag_edit)

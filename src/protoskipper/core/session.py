@@ -13,6 +13,7 @@ A :class:`Session` instance owns these resources and releases them on close
 (or on context-manager exit). Drivers should never be invoked outside this
 wrapper in production code paths.
 """
+
 from __future__ import annotations
 
 import logging

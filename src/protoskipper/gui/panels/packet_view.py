@@ -5,6 +5,7 @@ Subscribes to :attr:`ApplicationState.frame_captured` via
 :class:`PacketLogModel`. Filtering by the selected session keeps the
 focus tight when many sessions are open simultaneously.
 """
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import (

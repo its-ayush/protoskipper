@@ -1,0 +1,72 @@
+# ProtoSkipper pre-commit hooks.
+#
+# Install:  pip install pre-commit && pre-commit install
+# Run all:  pre-commit run --all-files
+#
+# All hooks are pinned to exact revs so that the project's quality bar
+# cannot drift silently when a tool releases a new version.  Update
+# versions deliberately (bump + test + commit), not automatically.
+#
+# EMERGENCY bypass (use sparingly; never in CI):
+#   git commit --no-verify -m "wip: ..."
+#
+# Hook ordering:
+#   1. File-level hygiene (end-of-file, whitespace, syntax checks)
+#   2. Ruff linting (may modify files to apply safe auto-fixes)
+#   3. Ruff formatting (normalises whitespace/blank-lines)
+#   4. Type checking (mypy, no file modifications)
+#   5. Unit tests (fastest test set; blocks on any regression)
+---
+repos:
+  # ---------------------------------------------------------------------------
+  # 1. File-level hygiene
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  # ---------------------------------------------------------------------------
+  # 2. Ruff linting (pinned to the same version as in pyproject.toml dev deps)
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # 3. Mypy type checking
+  #    Uses language: system so it sees the project's installed deps (PySide6,
+  #    pymodbus, cryptography) without having to re-declare them as
+  #    additional_dependencies.  This means the developer must have the full
+  #    `pip install -e ".[all,dev]"` environment active.
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (core layer strict)
+        entry: mypy src/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # ---------------------------------------------------------------------------
+  # 4. Unit tests (fast subset; < 2 s on modern hardware)
+  #    Integration and GUI tests are excluded here — they run in CI.
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: pytest-unit
+        name: pytest (unit suite)
+        entry: pytest tests/unit/ -q --tb=short
+        language: system
+        types: [python]
+        pass_filenames: false

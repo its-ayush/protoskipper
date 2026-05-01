@@ -5,6 +5,7 @@ Lives in the right dock so the operator always sees, at a glance, which
 sessions are open, what profile each is on, and where its audit log is
 being written. This is the panel the safety story relies on for visibility.
 """
+
 from __future__ import annotations
 
 from PySide6.QtWidgets import (

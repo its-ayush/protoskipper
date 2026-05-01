@@ -11,6 +11,7 @@ The MainWindow owns exactly one of:
 ApplicationState, SessionManager, GuiConfirmHandler. Panels and dialogs
 receive these through constructor injection.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -74,7 +75,8 @@ class MainWindow(QMainWindow):
         self._audit_dir = _default_audit_dir()
         self._audit_dir.mkdir(parents=True, exist_ok=True)
         self._confirm_handler = GuiConfirmHandler(
-            dialog_factory=self._safety_dialog_factory, parent=self,
+            dialog_factory=self._safety_dialog_factory,
+            parent=self,
         )
         self._session_manager = SessionManager(
             state=self._state,
@@ -136,7 +138,8 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self._action_disconnect)
         toolbar.addSeparator()
         self._audit_label = QLabel(
-            f"Audit dir: {self._audit_dir}", self,
+            f"Audit dir: {self._audit_dir}",
+            self,
         )
         self._audit_label.setStyleSheet("padding: 0 8px; color: #4b5563;")
         toolbar.addWidget(self._audit_label)
@@ -204,9 +207,12 @@ class MainWindow(QMainWindow):
         s.session_opened.connect(lambda *_a: self.statusBar().showMessage("Session opened", 4000))
         s.session_closed.connect(lambda *_a: self.statusBar().showMessage("Session closed", 4000))
         s.write_completed.connect(lambda *_a: self.statusBar().showMessage("Write completed", 4000))
-        s.write_denied.connect(lambda *_a: self.statusBar().showMessage(
-            "Write denied by safety profile", 6000,
-        ))
+        s.write_denied.connect(
+            lambda *_a: self.statusBar().showMessage(
+                "Write denied by safety profile",
+                6000,
+            )
+        )
 
     # ---- session management dispatch ------------------------------------
 
@@ -215,7 +221,8 @@ class MainWindow(QMainWindow):
         device, we hand off to a pre-filled New Connection dialog."""
         if not load_protocol_drivers():
             QMessageBox.warning(
-                self, "No protocol drivers",
+                self,
+                "No protocol drivers",
                 "No protocol drivers are installed. Run `pip install "
                 "protoskipper[modbus]` and restart.",
             )
@@ -231,7 +238,8 @@ class MainWindow(QMainWindow):
     def _open_new_connection_dialog(self, prefill: ProbeSelection | None = None) -> None:
         if not load_protocol_drivers():
             QMessageBox.warning(
-                self, "No protocol drivers",
+                self,
+                "No protocol drivers",
                 "No protocol drivers are installed. Run `pip install "
                 "protoskipper[modbus]` and restart.",
             )
@@ -260,7 +268,8 @@ class MainWindow(QMainWindow):
             return
         self._session_manager.open_session(device, req.profile, req.operator)
         self.statusBar().showMessage(
-            f"Opening session to {device.address} ({req.profile.value})…", 4000,
+            f"Opening session to {device.address} ({req.profile.value})…",
+            4000,
         )
 
     def _disconnect_current_session(self) -> None:
@@ -273,8 +282,11 @@ class MainWindow(QMainWindow):
         self._session_manager.close_session(SessionId(session_id))
 
     def _currently_selected_session(self) -> str | None:
-        info = self._state.session(SessionId(self._object_browser._session_id)) \
-            if self._object_browser._session_id else None
+        info = (
+            self._state.session(SessionId(self._object_browser._session_id))
+            if self._object_browser._session_id
+            else None
+        )
         return info.session_id if info else None
 
     # ---- panel selection forwarding --------------------------------------
@@ -356,7 +368,8 @@ class MainWindow(QMainWindow):
         added = self._state.add_to_watchlist(SessionId(session_id), ref)
         if added:
             self.statusBar().showMessage(
-                f"Added {ref.object_id} to watchlist", 3000,
+                f"Added {ref.object_id} to watchlist",
+                3000,
             )
 
     # ---- error / failure surfaces --------------------------------------
@@ -367,7 +380,8 @@ class MainWindow(QMainWindow):
 
     def _on_session_failed(self, session_id: str, error: str) -> None:
         QMessageBox.warning(
-            self, "Session failed",
+            self,
+            "Session failed",
             f"Could not open session {session_id}: {error}",
         )
 
@@ -375,7 +389,8 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         QMessageBox.about(
-            self, "About ProtoSkipper",
+            self,
+            "About ProtoSkipper",
             (
                 f"<h3>ProtoSkipper {__version__}</h3>"
                 "<p>Open-source SCADA &amp; BMS protocol testing toolkit.</p>"

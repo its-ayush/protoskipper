@@ -17,6 +17,7 @@ distinguishable test values.
 This is also used as a pytest fixture by the integration tests; running it
 manually is the same code path with a longer-running event loop.
 """
+
 from __future__ import annotations
 
 import logging
@@ -54,8 +55,7 @@ def build_datastore():
     # is the default now). Pass it only when accepted to stay compatible
     # with older releases.
     try:
-        return DeviceContext(di=discrete, co=coils, hr=holding, ir=input_regs,
-                             zero_mode=True)
+        return DeviceContext(di=discrete, co=coils, hr=holding, ir=input_regs, zero_mode=True)
     except TypeError:
         return DeviceContext(di=discrete, co=coils, hr=holding, ir=input_regs)
 
@@ -83,14 +83,15 @@ if __name__ == "__main__":
         prog="protoskipper.builtin_drivers.modbus.simulator",
         description="Modbus TCP slave for testing ProtoSkipper without real hardware.",
     )
-    parser.add_argument("--host", default=DEFAULT_HOST,
-                        help=f"Bind address (default: {DEFAULT_HOST})")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT,
-                        help=f"Bind port (default: {DEFAULT_PORT})")
+    parser.add_argument(
+        "--host", default=DEFAULT_HOST, help=f"Bind address (default: {DEFAULT_HOST})"
+    )
+    parser.add_argument(
+        "--port", type=int, default=DEFAULT_PORT, help=f"Bind port (default: {DEFAULT_PORT})"
+    )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [%(levelname)s] %(message)s")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     try:
         serve(args.host, args.port)
     except KeyboardInterrupt:

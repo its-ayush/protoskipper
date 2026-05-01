@@ -17,6 +17,7 @@ The dialog does not touch drivers directly. It calls
 signals, so the UI thread stays responsive while the worker thread
 hammers the network.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -50,8 +51,7 @@ _TARGET_HINTS = {
         "192.168.1.0/24/units=1-10  |  10.0.0.5,10.0.0.7/units=1-247"
     ),
     "modbus.rtu": (
-        "Examples: /dev/ttyUSB0  |  /dev/ttyUSB0@9600,N,1/units=1-32  |  "
-        "COM4@19200,E,1/unit=3"
+        "Examples: /dev/ttyUSB0  |  /dev/ttyUSB0@9600,N,1/units=1-32  |  COM4@19200,E,1/unit=3"
     ),
 }
 
@@ -59,6 +59,7 @@ _TARGET_HINTS = {
 @dataclass(frozen=True)
 class ProbeSelection:
     """What the operator picked from the result list (if anything)."""
+
     device: DeviceRef
     protocol_id: str
 
@@ -236,16 +237,16 @@ class ProbeNetworkDialog(QDialog):
         if "revision" in meta:
             notes_parts.append(f"rev={meta['revision']}")
         if "baudrate" in meta:
-            notes_parts.append(f"{meta['baudrate']},{meta.get('parity','N')},{meta.get('stopbits',1)}")
+            notes_parts.append(
+                f"{meta['baudrate']},{meta.get('parity', 'N')},{meta.get('stopbits', 1)}"
+            )
         notes = "  ".join(notes_parts)
 
         self._table.setItem(row, 0, QTableWidgetItem(device.address))
         self._table.setItem(row, 1, QTableWidgetItem(device.label or ""))
         self._table.setItem(row, 2, QTableWidgetItem(str(meta.get("vendor_name", ""))))
         self._table.setItem(row, 3, QTableWidgetItem(notes))
-        self._status_label.setText(
-            f"Scanning… {self._table.rowCount()} device(s) found so far."
-        )
+        self._status_label.setText(f"Scanning… {self._table.rowCount()} device(s) found so far.")
 
     def _on_discovery_finished(self, protocol_id: str, count: int) -> None:
         if not self._scan_active:
@@ -255,10 +256,7 @@ class ProbeNetworkDialog(QDialog):
         self._scan_active = False
         self._discovery_id = None
         n_found = self._table.rowCount()
-        self._status_label.setText(
-            f"Done. {n_found} device(s) found "
-            f"({count} probe response(s))."
-        )
+        self._status_label.setText(f"Done. {n_found} device(s) found ({count} probe response(s)).")
         self._update_buttons()
 
     def _on_error(self, operation: str, message: str) -> None:
@@ -274,7 +272,8 @@ class ProbeNetworkDialog(QDialog):
             return
         device = self._discovered_devices[idx]
         self._selection = ProbeSelection(
-            device=device, protocol_id=device.protocol,
+            device=device,
+            protocol_id=device.protocol,
         )
         self.accept()
 

@@ -27,6 +27,7 @@ Design notes
   systems care about whether a value is stale, uncertain, or simulated; the
   GUI uses this to color points in the watchlist.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -215,6 +216,33 @@ class SafetyContext:
         )
         return authorized
 
+    def record_write_outcome(self, result: WriteResult) -> None:
+        """Record the wire-transmission outcome in the audit log.
+
+        Must be called exactly once by the driver after
+        :meth:`require_write_authorization` returned ``True`` and the
+        transmission was attempted — regardless of whether it succeeded or
+        failed.  This closes the *write_authorization* event in the audit
+        chain: every authorised write must have a matching outcome row.
+
+        Denied writes (where :meth:`require_write_authorization` returned
+        ``False``) must NOT call this method; no bytes were transmitted and
+        the denial is already recorded.
+        """
+        if result.success:
+            self._audit(
+                event="write_committed",
+                intent=result.intent,
+                timestamp=result.timestamp,
+            )
+        else:
+            self._audit(
+                event="write_failed",
+                intent=result.intent,
+                error=result.error,
+                timestamp=result.timestamp,
+            )
+
 
 # Callback signatures used by SafetyContext - kept loose on purpose so the
 # core does not depend on the GUI or the audit module.
@@ -288,6 +316,23 @@ class DriverSession(ABC):
 
     device: DeviceRef
     safety: SafetyContext
+
+    # ---- Frame capture (optional but universally supported) --------------
+    # Drivers that can intercept raw wire bytes attach a CaptureSink here.
+    # The default concrete implementation is a no-op; drivers that subclass
+    # a transport client override attach_frame_sink to install the sink into
+    # the transport layer. The GUI calls this immediately after connect().
+    _frame_sink: CaptureSink | None = None
+
+    def attach_frame_sink(self, sink: CaptureSink | None) -> None:
+        """Attach (or detach, when sink is None) a raw-frame capture sink.
+
+        The default implementation stores the sink; subclasses that control
+        a transport client should override to also wire the sink into that
+        client so that every send/recv byte pair is forwarded. Frames are
+        silently dropped if no sink is attached.
+        """
+        self._frame_sink = sink
 
     @abstractmethod
     def enumerate_objects(self) -> Iterator[ObjectRef]:
@@ -391,6 +436,7 @@ class Capturer(Protocol):
     def stop_capture(self) -> None: ...
 
 
+@runtime_checkable
 class CaptureSink(Protocol):
     """Where captured protocol frames go.
 

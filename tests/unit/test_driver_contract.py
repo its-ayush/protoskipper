@@ -5,7 +5,10 @@ These tests are deliberately strict — the contract is the project's most
 load-bearing invariant. If they pass, third-party plugins can rely on the
 shape of the abstractions.
 """
+
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 
@@ -19,6 +22,7 @@ from protoskipper.core.driver import (
     SafetyContext,
     SessionProfile,
     WriteIntent,
+    WriteResult,
 )
 
 
@@ -44,12 +48,14 @@ def test_quality_enum_includes_simulated() -> None:
 
 
 def test_device_and_object_refs_are_frozen() -> None:
+    # frozen=True dataclasses raise FrozenInstanceError (Python 3.11+), which
+    # is a subclass of AttributeError on all supported Python versions (3.10+).
     dev = DeviceRef(protocol="modbus.tcp", address="1.2.3.4:502/unit=1")
-    with pytest.raises(Exception):  # FrozenInstanceError
+    with pytest.raises(AttributeError):
         dev.address = "other"  # type: ignore[misc]
 
     obj = ObjectRef(device=dev, object_id="holding:0", data_type="uint16")
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         obj.object_id = "other"  # type: ignore[misc]
 
 
@@ -80,9 +86,74 @@ def test_safety_context_audits_authorization_outcomes() -> None:
 
 def _make_intent() -> WriteIntent:
     dev = DeviceRef(protocol="modbus.tcp", address="1.2.3.4:502/unit=1")
-    obj = ObjectRef(device=dev, object_id="holding:0", data_type="uint16",
-                    access=Access.READ_WRITE)
+    obj = ObjectRef(device=dev, object_id="holding:0", data_type="uint16", access=Access.READ_WRITE)
     return WriteIntent(
-        object_ref=obj, requested_value=42,
-        encoded_bytes=b"\x00\x2a", description="test",
+        object_ref=obj,
+        requested_value=42,
+        encoded_bytes=b"\x00\x2a",
+        description="test",
     )
+
+
+def test_safety_context_record_write_outcome_committed() -> None:
+    """record_write_outcome emits write_committed when the write succeeded."""
+    audited: list[dict] = []
+    intent = _make_intent()
+    ts = datetime.now(timezone.utc)
+    result = WriteResult(intent=intent, success=True, timestamp=ts)
+
+    safety = SafetyContext(
+        profile=SessionProfile.LAB,
+        confirm_callback=lambda i, p: True,
+        audit_callback=lambda **fields: audited.append(fields),
+    )
+    safety.require_write_authorization(intent)
+    safety.record_write_outcome(result)
+
+    assert len(audited) == 2
+    assert audited[0]["event"] == "write_authorization"
+    assert audited[0]["authorized"] is True
+    assert audited[1]["event"] == "write_committed"
+    assert audited[1]["timestamp"] == ts
+
+
+def test_safety_context_record_write_outcome_failed() -> None:
+    """record_write_outcome emits write_failed when the transmission failed."""
+    audited: list[dict] = []
+    intent = _make_intent()
+    ts = datetime.now(timezone.utc)
+    result = WriteResult(intent=intent, success=False, timestamp=ts, error="timeout")
+
+    safety = SafetyContext(
+        profile=SessionProfile.LAB,
+        confirm_callback=lambda i, p: True,
+        audit_callback=lambda **fields: audited.append(fields),
+    )
+    safety.require_write_authorization(intent)
+    safety.record_write_outcome(result)
+
+    assert len(audited) == 2
+    assert audited[1]["event"] == "write_failed"
+    assert audited[1]["error"] == "timeout"
+
+
+def test_denied_write_has_no_outcome_row() -> None:
+    """When authorisation is denied, record_write_outcome must NOT be called;
+    the audit trail contains only the write_authorization(authorized=False) row."""
+    audited: list[dict] = []
+    intent = _make_intent()
+
+    safety = SafetyContext(
+        profile=SessionProfile.PRODUCTION,
+        confirm_callback=lambda i, p: False,
+        audit_callback=lambda **fields: audited.append(fields),
+    )
+    result = safety.require_write_authorization(intent)
+
+    assert result is False
+    assert len(audited) == 1
+    assert audited[0]["authorized"] is False
+    # Confirm that only one row exists — no spurious write_committed or write_failed.
+    events = [r["event"] for r in audited]
+    assert "write_committed" not in events
+    assert "write_failed" not in events

@@ -12,6 +12,7 @@ constructor injection is testable (use a fake), debuggable (one place to
 breakpoint), and explicit. There is exactly one production instance at a
 time, owned by :class:`MainWindow`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

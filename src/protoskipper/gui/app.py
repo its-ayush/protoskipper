@@ -6,6 +6,7 @@ window, and runs the event loop. Kept deliberately small so the heavy
 lifting (driver loading, panel construction) stays in :mod:`main_window`
 where it can be tested without driving a Qt loop.
 """
+
 from __future__ import annotations
 
 import logging

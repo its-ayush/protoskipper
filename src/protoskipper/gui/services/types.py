@@ -5,6 +5,7 @@ Kept separate from :mod:`protoskipper.core` so the core package does not pick
 up Qt dependencies, and separate from individual panels so the types can be
 shared without introducing cyclic imports.
 """
+
 from __future__ import annotations
 
 import uuid

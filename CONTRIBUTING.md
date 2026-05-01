@@ -50,13 +50,54 @@ We do **not** accept CLAs because no single party — including DataSailors —
 should have the unilateral power to relicense the project. The DCO + GPL-3.0
 combination keeps the project genuinely community-owned.
 
+## Developer setup
+
+```bash
+# Full install with all extras and dev tools
+pip install -e ".[all,dev]"
+
+# Install pre-commit hooks (run once per clone)
+pre-commit install
+
+# Run all checks manually at any time
+pre-commit run --all-files
+```
+
+## Pre-commit hooks
+
+ProtoSkipper ships a `.pre-commit-config.yaml` that enforces the quality
+bar on every commit automatically. The hook chain is:
+
+1. **File hygiene** — end-of-file newlines, trailing whitespace, YAML/TOML
+   validity, merge-conflict markers, debug statements.
+2. **Ruff lint** — applies safe auto-fixes and checks the full rule set.
+3. **Ruff format** — normalises whitespace and blank lines.
+4. **Mypy** — strict type-checking on the core layer.
+5. **pytest (unit)** — runs the fast unit suite (< 2 s) to catch
+   regressions before the commit lands.
+
+All hook versions are **exactly pinned**. Update them deliberately:
+
+```bash
+# Example: bump ruff to v0.X.Y
+# 1. Edit the rev in .pre-commit-config.yaml AND the version in pyproject.toml
+# 2. pre-commit run --all-files
+# 3. pytest
+# 4. git commit -m "chore(deps): bump ruff to 0.X.Y"
+```
+
+Emergency bypass (`--no-verify`) is **never permitted in CI** and should
+be a last resort locally. If you need to bypass, explain why in the commit
+message and open a follow-up issue.
+
 ## Code style
 
 - Python 3.10+, type hints required on all public APIs.
 - `ruff` for linting and import sorting.
 - `mypy --strict` for the core package; protocol drivers are encouraged
   but not required to pass strict.
-- Run `ruff check . && mypy && pytest` before opening a PR.
+- Run `pre-commit run --all-files` before opening a PR (or rely on the
+  git hook to do it automatically).
 
 ## Writing a new protocol driver
 

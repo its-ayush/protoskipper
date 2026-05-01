@@ -11,6 +11,7 @@ This file has more wiring than logic; the logic lives in
 :class:`DriverWorker` and the core. The wiring is what guarantees the
 "never call drivers from the UI thread" rule.
 """
+
 from __future__ import annotations
 
 import logging
@@ -101,19 +102,20 @@ class SessionManager(QObject):
             lambda device: self._state.record_device_discovered(device)
         )
         worker.discovery_finished.connect(
-            lambda count, pid=protocol_id, did=discovery_id:
-            self._on_discovery_finished(did, pid, count)
+            lambda count, pid=protocol_id, did=discovery_id: self._on_discovery_finished(
+                did, pid, count
+            )
         )
-        worker.error_raised.connect(
-            lambda op, msg: self._state.record_error(op, msg)
-        )
+        worker.error_raised.connect(lambda op, msg: self._state.record_error(op, msg))
 
         self._state.discovery_started.emit(protocol_id)
         thread.start()
         self._workers[discovery_id] = _WorkerHandle(worker=worker, thread=thread)
 
         QMetaObject.invokeMethod(
-            worker, "start_discovery", Qt.QueuedConnection,
+            worker,
+            "start_discovery",
+            Qt.QueuedConnection,
             Q_ARG(str, target),
         )
         return discovery_id
@@ -126,7 +128,10 @@ class SessionManager(QObject):
         QMetaObject.invokeMethod(handle.worker, "cancel", Qt.DirectConnection)
 
     def _on_discovery_finished(
-        self, discovery_id: SessionId, protocol_id: str, count: int,
+        self,
+        discovery_id: SessionId,
+        protocol_id: str,
+        count: int,
     ) -> None:
         self._state.discovery_finished.emit(protocol_id, count)
         handle = self._workers.get(discovery_id)
@@ -157,34 +162,36 @@ class SessionManager(QObject):
 
         # Wire worker signals into ApplicationState.record_* mutators.
         worker.session_opened.connect(
-            lambda sid=session_id, dev=device, prof=profile, op=operator:
-            self._state.record_session_opened(SessionInfo(
-                session_id=sid, device=dev, profile=prof, operator=op,
-            ))
+            lambda sid=session_id, dev=device, prof=profile, op=operator: (
+                self._state.record_session_opened(
+                    SessionInfo(
+                        session_id=sid,
+                        device=dev,
+                        profile=prof,
+                        operator=op,
+                    )
+                )
+            )
         )
         worker.objects_enumerated.connect(
-            lambda objects, sid=session_id:
-            self._state.record_objects_enumerated(sid, list(objects))
+            lambda objects, sid=session_id: self._state.record_objects_enumerated(
+                sid, list(objects)
+            )
         )
         worker.read_completed.connect(
-            lambda result, sid=session_id:
-            self._state.record_read_completed(sid, result)
+            lambda result, sid=session_id: self._state.record_read_completed(sid, result)
         )
         worker.write_intent_prepared.connect(
-            lambda intent, sid=session_id:
-            self._state.record_write_intent_prepared(sid, intent)
+            lambda intent, sid=session_id: self._state.record_write_intent_prepared(sid, intent)
         )
         worker.write_committed.connect(
-            lambda result, sid=session_id:
-            self._state.record_write_completed(sid, result)
+            lambda result, sid=session_id: self._state.record_write_completed(sid, result)
         )
         worker.write_denied.connect(
-            lambda intent, sid=session_id:
-            self._state.record_write_denied(sid, intent)
+            lambda intent, sid=session_id: self._state.record_write_denied(sid, intent)
         )
-        worker.closed.connect(
-            lambda sid=session_id: self._on_worker_closed(sid)
-        )
+        worker.frame_captured.connect(self._state.record_frame_captured)
+        worker.closed.connect(lambda sid=session_id: self._on_worker_closed(sid))
         worker.error_raised.connect(
             lambda op, msg, sid=session_id: self._on_worker_error(sid, op, msg)
         )
@@ -194,7 +201,9 @@ class SessionManager(QObject):
 
         # Schedule the open() slot to run on the worker thread.
         QMetaObject.invokeMethod(
-            worker, "open", Qt.QueuedConnection,
+            worker,
+            "open",
+            Qt.QueuedConnection,
             Q_ARG(DeviceRef, device),
             Q_ARG(object, profile),
             Q_ARG(str, operator),
@@ -224,14 +233,18 @@ class SessionManager(QObject):
     def read(self, session_id: SessionId, ref: ObjectRef) -> None:
         handle = self._require(session_id)
         QMetaObject.invokeMethod(
-            handle.worker, "read", Qt.QueuedConnection,
+            handle.worker,
+            "read",
+            Qt.QueuedConnection,
             Q_ARG(object, ref),
         )
 
     def prepare_write(self, session_id: SessionId, ref: ObjectRef, value: Any) -> None:
         handle = self._require(session_id)
         QMetaObject.invokeMethod(
-            handle.worker, "prepare_write", Qt.QueuedConnection,
+            handle.worker,
+            "prepare_write",
+            Qt.QueuedConnection,
             Q_ARG(object, ref),
             Q_ARG(object, value),
         )
@@ -239,7 +252,9 @@ class SessionManager(QObject):
     def commit_write(self, session_id: SessionId, intent: WriteIntent) -> None:
         handle = self._require(session_id)
         QMetaObject.invokeMethod(
-            handle.worker, "commit_write", Qt.QueuedConnection,
+            handle.worker,
+            "commit_write",
+            Qt.QueuedConnection,
             Q_ARG(object, intent),
         )
 
@@ -299,6 +314,7 @@ class SessionManager(QObject):
 
 class _WorkerHandle:
     """Bundle of (worker, thread) so SessionManager can clean up reliably."""
+
     __slots__ = ("thread", "worker")
 
     def __init__(self, worker: DriverWorker, thread: QThread) -> None:

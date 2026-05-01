@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main, "release/**"]
+  pull_request:
+    branches: [master, main]
+
+# Cancel in-flight runs for the same branch/PR when a new push arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Lint + type check
+  # Runs on a single OS/Python combo — there is no platform-specific logic
+  # in ruff or mypy for this project.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint & type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dev deps
+        run: pip install -e ".[all,dev]"
+
+      - name: ruff check
+        run: ruff check src/ tests/
+
+      - name: ruff format (check only)
+        run: ruff format --check src/ tests/
+
+      - name: mypy
+        run: mypy src/
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Unit tests
+  # Matrix covers all supported Python versions × all supported OS.
+  # Unit tests have zero network requirements and run in < 5 s.
+  # ---------------------------------------------------------------------------
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dev deps
+        # On Windows pymodbus uses optional Twisted reactor; skip iec61850 which
+        # is Linux-only.
+        run: pip install -e ".[modbus,dev]"
+
+      - name: pytest (unit) with coverage
+        run: >
+          pytest tests/unit/
+          --cov=protoskipper
+          --cov-config=pyproject.toml
+          --cov-report=xml:coverage.xml
+          --cov-report=term-missing
+          -q
+
+      - name: Upload coverage report
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Integration tests (Linux only — requires real sockets)
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -e ".[modbus,dev]"
+
+      - name: pytest (integration)
+        run: pytest tests/integration/ -q --tb=short -m integration
+
+  # ---------------------------------------------------------------------------
+  # Job 4: GUI tests (Linux, needs virtual display)
+  # Skipped when PySide6 cannot load or no display is available.
+  # ---------------------------------------------------------------------------
+  gui:
+    name: GUI tests
+    runs-on: ubuntu-latest
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system display deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+            libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libgl1-mesa-dri \
+            libxcb1 libx11-xcb1 xvfb
+
+      - name: Install deps
+        run: pip install -e ".[gui,modbus,dev]"
+
+      - name: pytest (GUI) under Xvfb
+        run: >
+          xvfb-run --auto-servernum
+          pytest tests/gui/ -q --tb=short -m gui
+        env:
+          QT_QPA_PLATFORM: xcb

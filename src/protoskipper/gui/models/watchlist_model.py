@@ -4,6 +4,7 @@
 Columns: Tag, Value, Quality, Updated. Rows are
 ``(SessionId, ObjectRef)`` tuples kept in :class:`ApplicationState`.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -81,8 +82,9 @@ class WatchlistModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self.HEADERS)
 
-    def headerData(self, section: int, orientation: Qt.Orientation,
-                   role: int = Qt.DisplayRole) -> Any:
+    def headerData(
+        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
+    ) -> Any:
         if role != Qt.DisplayRole or orientation != Qt.Horizontal:
             return None
         return self.HEADERS[section]
