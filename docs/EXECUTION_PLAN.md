@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 7 / 92 tasks complete (7.6%)**
+> **Overall Progress: 9 / 92 tasks complete (9.8%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -333,7 +333,7 @@ connect → read → write loop without a defect.
   * Integration: `test_modbus_session_emits_frames_for_read_and_write`.
   * Unit (with mocked client): `test_capturing_client_forwards_send_and_recv`.
 
-### P0.C.3 `_currently_selected_session` no longer reaches into private state
+### ✅ P0.C.3 `_currently_selected_session` no longer reaches into private state
 
 * **Goal:** Remove the access to `self._object_browser._session_id` from
   `MainWindow`; expose a public accessor on the panel.
@@ -347,7 +347,7 @@ connect → read → write loop without a defect.
 * **Tests required:** GUI test verifying the disconnect button enables/
   disables when sessions open and close.
 
-### P0.C.4 `MainWindow` write-flow controller extracted
+### ✅ P0.C.4 `MainWindow` write-flow controller extracted
 
 * **Goal:** `MainWindow._open_write_dialog` is currently 30+ lines of
   signal wiring with two `disconnect`/`connect` flips. Move that logic
