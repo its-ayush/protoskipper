@@ -160,9 +160,10 @@ operator clicks "Write 230 to holding[40001]" on a Modbus TCP device:
 6. GUI calls `session.driver_session.commit_write(intent)`.
 7. The Modbus driver re-checks the safety context, then transmits
    function code 0x06 to the device.
-8. On response, the driver returns a `WriteResult`. The session's audit
-   log records `event="write_committed"` (in a future iteration; the
-   current scaffold only audits the authorisation step).
+8. On response, the driver calls `safety.record_write_outcome(result)` which
+   writes an `event="write_committed"` row (success) or `event="write_failed"`
+   row (transport error) to the audit log. Every authorised write therefore
+   has a matching outcome row.
 9. GUI updates the watchlist and packet view.
 
 If the operator denies in step 4, steps 6–9 never run, but the audit log

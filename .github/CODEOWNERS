@@ -1,0 +1,31 @@
+# CODEOWNERS
+# Each line maps a path pattern to the GitHub users/teams responsible for review.
+# The last matching rule takes precedence.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default — DataSailors core team owns everything not matched below
+*                                          @datasailors/core
+
+# Core layer (protocol-agnostic, zero Qt deps) — reviewed by core team
+src/protoskipper/core/                     @datasailors/core
+tests/unit/                               @datasailors/core
+
+# Driver layer (built-in + plugin contract) — reviewed by core + driver team
+src/protoskipper/builtin_drivers/          @datasailors/core @datasailors/drivers
+tests/integration/                        @datasailors/core @datasailors/drivers
+
+# GUI layer (PySide6, no protocol-specific imports) — reviewed by GUI team
+src/protoskipper/gui/                      @datasailors/gui
+
+# CLI entrypoint
+src/protoskipper/cli.py                    @datasailors/core
+
+# CI / DevOps
+.github/                                  @datasailors/core
+pyproject.toml                            @datasailors/core
+.pre-commit-config.yaml                   @datasailors/core
+
+# Documentation
+docs/                                     @datasailors/core
+CHANGELOG.md                              @datasailors/core
+CONTRIBUTING.md                           @datasailors/core
