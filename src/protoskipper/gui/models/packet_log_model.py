@@ -55,6 +55,15 @@ class PacketLogModel(QAbstractTableModel):
         self._frames.clear()
         self.endResetModel()
 
+    def load_frames(self, frames: list[CapturedFrame]) -> None:
+        """Replace model contents with *frames* (used by replay mode)."""
+        self.beginResetModel()
+        self._frames.clear()
+        # Respect maxlen — deque will evict oldest if frames exceed capacity.
+        for f in frames:
+            self._frames.append(f)
+        self.endResetModel()
+
     # ---- signal handler -------------------------------------------------
 
     def _on_frame(self, frame: CapturedFrame) -> None:

@@ -21,6 +21,7 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDockWidget,
+    QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from protoskipper import __version__
+from protoskipper.core.capture.pcapng import read_pcapng
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
 from protoskipper.gui.dialogs import (
@@ -50,7 +52,8 @@ from protoskipper.gui.services import (
     GuiConfirmHandler,
     SessionManager,
 )
-from protoskipper.gui.services.types import SessionId
+from protoskipper.gui.services.types import CapturedFrame as GuiFrame
+from protoskipper.gui.services.types import Direction, SessionId
 from protoskipper.gui.services.write_flow import WriteFlowController
 
 _logger = logging.getLogger(__name__)
@@ -88,6 +91,9 @@ class MainWindow(QMainWindow):
             session_manager=self._session_manager,
             parent=self,
         )
+
+        # Capture state tracking (per-window, not per-session).
+        self._capture_active: bool = False
 
         # ---- ui ----
         self._build_actions()
@@ -129,6 +135,32 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._action_disconnect)
         file_menu.addSeparator()
         file_menu.addAction(self._action_quit)
+
+        # Capture menu (P2.A.2)
+        self._action_capture_start = QAction("&Start Capture", self)
+        self._action_capture_start.setShortcut("Ctrl+Shift+R")
+        self._action_capture_start.triggered.connect(self._on_capture_start)
+
+        self._action_capture_stop = QAction("S&top Capture", self)
+        self._action_capture_stop.setShortcut("Ctrl+Shift+T")
+        self._action_capture_stop.setEnabled(False)
+        self._action_capture_stop.triggered.connect(self._on_capture_stop)
+
+        self._action_capture_save = QAction("&Save Capture…", self)
+        self._action_capture_save.setShortcut("Ctrl+Shift+S")
+        self._action_capture_save.setEnabled(False)
+        self._action_capture_save.triggered.connect(self._on_capture_save)
+
+        self._action_capture_open = QAction("&Open Capture…", self)
+        self._action_capture_open.setShortcut("Ctrl+Shift+O")
+        self._action_capture_open.triggered.connect(self._on_capture_open)
+
+        capture_menu = menu.addMenu("&Capture")
+        capture_menu.addAction(self._action_capture_start)
+        capture_menu.addAction(self._action_capture_stop)
+        capture_menu.addAction(self._action_capture_save)
+        capture_menu.addSeparator()
+        capture_menu.addAction(self._action_capture_open)
 
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self._action_about)
@@ -239,6 +271,11 @@ class MainWindow(QMainWindow):
         s.session_closed.connect(self._on_session_state_changed)
         # P0.D.3: Keep disconnect button in sync when sessions close.
         s.session_closed.connect(self._on_session_closed_update_disconnect)
+        # P2.A.2: Update capture action states on session change.
+        s.session_opened.connect(self._on_session_state_for_capture)
+        s.session_closed.connect(self._on_session_state_for_capture)
+        # P2.A.2: Disable write actions when replay mode is active.
+        s.replay_mode_changed.connect(self._on_replay_mode_changed)
 
     # ---- session management dispatch ------------------------------------
 
@@ -383,6 +420,124 @@ class MainWindow(QMainWindow):
                 f"Added {ref.object_id} to watchlist",
                 3000,
             )
+
+    # ---- P2.A.2 capture ------------------------------------------------
+
+    def _active_session_id(self) -> SessionId | None:
+        """Return the currently selected open session, or None."""
+        sid_str = self._currently_selected_session()
+        if sid_str is None:
+            return None
+        sid = SessionId(sid_str)
+        info = self._state.session(sid)
+        return sid if info and info.is_open else None
+
+    def _on_session_state_for_capture(self, *_args: object) -> None:
+        """Keep capture actions consistent with session open/close state."""
+        has_session = self._active_session_id() is not None
+        self._action_capture_start.setEnabled(has_session and not self._capture_active)
+        self._action_capture_stop.setEnabled(has_session and self._capture_active)
+        self._action_capture_save.setEnabled(has_session and self._capture_active)
+
+    def _on_capture_start(self) -> None:
+        sid = self._active_session_id()
+        if sid is None:
+            return
+        self._state.exit_replay_mode()
+        self._packet_view.set_replay_mode(False)
+        self._session_manager.clear_capture(sid)
+        self._capture_active = True
+        self._on_session_state_for_capture()
+        self.statusBar().showMessage("Capture started", 3000)
+
+    def _on_capture_stop(self) -> None:
+        sid = self._active_session_id()
+        if sid is None:
+            self._capture_active = False
+            self._on_session_state_for_capture()
+            return
+        reply = QMessageBox.question(
+            self,
+            "Stop Capture",
+            "Save captured frames to a pcapng file?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            return
+        if reply == QMessageBox.StandardButton.Save:
+            self._save_capture_dialog(sid)
+        self._capture_active = False
+        self._on_session_state_for_capture()
+        self.statusBar().showMessage("Capture stopped", 3000)
+
+    def _on_capture_save(self) -> None:
+        sid = self._active_session_id()
+        if sid is None:
+            return
+        self._save_capture_dialog(sid)
+
+    def _save_capture_dialog(self, session_id: SessionId) -> None:
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Capture",
+            str(Path.home()),
+            "pcapng files (*.pcapng);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if not path.suffix:
+            path = path.with_suffix(".pcapng")
+        self._session_manager.save_capture(session_id, path)
+        self.statusBar().showMessage(f"Capture saved to {path.name}", 5000)
+
+    def _on_capture_open(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Capture",
+            str(Path.home()),
+            "pcapng files (*.pcapng);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            core_frames = read_pcapng(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot open capture file", str(exc))
+            return
+
+        # Convert core.capture.CapturedFrame → gui.services.types.CapturedFrame.
+        replay_sid = SessionId("__replay__")
+        gui_frames = [
+            GuiFrame(
+                session_id=replay_sid,
+                timestamp=f.timestamp,
+                direction=Direction(f.direction),
+                payload=f.payload,
+                metadata={},
+            )
+            for f in core_frames
+        ]
+
+        self._packet_view.set_session("__replay__")
+        self._packet_view.set_replay_mode(True)
+        self._packet_view.load_replay_frames(gui_frames)
+        self._state.record_replay_frames(gui_frames)
+        self.statusBar().showMessage(
+            f"Opened {len(gui_frames)} frames from {path.name} (read-only replay)", 6000
+        )
+
+    def _on_replay_mode_changed(self, active: bool) -> None:
+        """Disable or re-enable write actions when replay mode changes."""
+        self._action_new_connection.setEnabled(not active)
+        self._action_probe_network.setEnabled(not active)
+        self._action_disconnect.setEnabled(
+            not active and self._currently_selected_session() is not None
+        )
 
     # ---- error / failure surfaces --------------------------------------
 

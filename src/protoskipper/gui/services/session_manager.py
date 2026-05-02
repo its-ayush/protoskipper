@@ -314,6 +314,30 @@ class SessionManager(QObject):
         objects = load_csv(csv_path, device=info.device)
         self._state.record_objects_enumerated(session_id, objects)
 
+    def save_capture(self, session_id: SessionId, path: Path) -> None:
+        """Flush the session's ring-buffer capture to a pcapng file at *path*.
+
+        Dispatched asynchronously to the worker thread.  If the session is
+        not found, the call is silently ignored.
+        """
+        handle = self._workers.get(session_id)
+        if handle is None:
+            return
+        _w, _p = handle.worker, str(path)
+        QTimer.singleShot(0, _w, lambda: _w.flush_capture(_p))
+
+    def clear_capture(self, session_id: SessionId) -> None:
+        """Discard all buffered capture frames for *session_id*.
+
+        Dispatched asynchronously to the worker thread.  If the session is
+        not found, the call is silently ignored.
+        """
+        handle = self._workers.get(session_id)
+        if handle is None:
+            return
+        _w = handle.worker
+        QTimer.singleShot(0, _w, lambda: _w.clear_capture())
+
     # ---- internal --------------------------------------------------------
 
     def _require(self, session_id: SessionId) -> _WorkerHandle:

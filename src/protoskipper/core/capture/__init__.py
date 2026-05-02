@@ -112,6 +112,19 @@ class RingBufferCaptureSink:
         with self._lock:
             return len(self._buf)
 
+    def clear(self) -> None:
+        """Discard all buffered frames (e.g., at the start of a fresh capture)."""
+        with self._lock:
+            self._buf.clear()
+
+    def snapshot(self) -> list[CapturedFrame]:
+        """Return a point-in-time copy of all buffered frames.
+
+        Thread-safe: holds the lock for the duration of the copy.
+        """
+        with self._lock:
+            return list(self._buf)
+
     def flush_to(self, path: Path) -> int:
         """Write all buffered frames to *path* and return the frame count written.
 

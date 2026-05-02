@@ -81,6 +81,7 @@ class ApplicationState(QObject):
     audit_row_appended = Signal()  # fired once per audit-log row written
     error_raised = Signal(str, str)  # operation, message
     profile_changed = Signal(str, SessionProfile)  # session_id, new_profile
+    replay_mode_changed = Signal(bool)  # True = entered, False = exited
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -88,6 +89,7 @@ class ApplicationState(QObject):
         self._discovered: dict[str, DeviceRef] = {}  # address -> DeviceRef
         self._sessions: dict[SessionId, SessionInfo] = {}
         self._watchlist: list[tuple[SessionId, ObjectRef]] = []
+        self._replay_mode: bool = False
 
     # ---- read-only accessors ---------------------------------------------
 
@@ -102,6 +104,11 @@ class ApplicationState(QObject):
 
     def watchlist(self) -> list[tuple[SessionId, ObjectRef]]:
         return list(self._watchlist)
+
+    @property
+    def replay_mode(self) -> bool:
+        """True when the GUI is showing a loaded pcapng file, not a live session."""
+        return self._replay_mode
 
     # ---- mutators (called by SessionManager) -----------------------------
 
@@ -163,6 +170,24 @@ class ApplicationState(QObject):
 
     def record_error(self, operation: str, message: str) -> None:
         self.error_raised.emit(operation, message)
+
+    def record_replay_frames(self, frames: list[CapturedFrame]) -> None:
+        """Enter replay mode and emit each frame through the normal channel.
+
+        All panels that react to :attr:`frame_captured` will display the
+        replayed frames without knowing whether they come from a live session
+        or a pcapng file.
+        """
+        self._replay_mode = True
+        self.replay_mode_changed.emit(True)
+        for frame in frames:
+            self.frame_captured.emit(frame)
+
+    def exit_replay_mode(self) -> None:
+        """Leave replay mode (e.g. when the user opens a live session)."""
+        if self._replay_mode:
+            self._replay_mode = False
+            self.replay_mode_changed.emit(False)
 
     def add_to_watchlist(self, session_id: SessionId, obj: ObjectRef) -> bool:
         entry = (session_id, obj)

@@ -22,6 +22,7 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal, Slot
 
 from protoskipper.core.capture import RingBufferCaptureSink
+from protoskipper.core.capture.pcapng import write_pcapng
 from protoskipper.core.driver import (
     DeviceRef,
     ObjectRef,
@@ -248,19 +249,28 @@ class DriverWorker(QObject):
 
     @Slot(str)
     def flush_capture(self, path: str) -> None:
-        """Flush the in-memory frame ring-buffer to a binary capture file.
+        """Write buffered capture frames to a pcapng file at *path*.
 
+        Uses the ring buffer's in-memory snapshot; the buffer is NOT cleared
+        after the flush so subsequent saves produce cumulative files.
         No-op when no session is open or no frames have been captured.
-        The buffer is retained after the flush so subsequent calls produce
-        cumulative files.
         """
         if self._ring_sink is None:
             return
         try:
-            n = self._ring_sink.flush_to(Path(path))
-            _logger.debug("Flushed %d capture frames to %s", n, path)
+            frames = self._ring_sink.snapshot()
+            protocol_id = self._session.device.protocol if self._session is not None else "unknown"
+            n = write_pcapng(frames, Path(path), protocol_id=protocol_id)
+            _logger.debug("Wrote %d capture frames to pcapng: %s", n, path)
         except Exception:
             _logger.exception("flush_capture failed")
+
+    @Slot()
+    def clear_capture(self) -> None:
+        """Discard all buffered frames so the next capture starts fresh."""
+        if self._ring_sink is not None:
+            self._ring_sink.clear()
+            _logger.debug("Capture buffer cleared")
 
     @Slot()
     def cancel(self) -> None:
