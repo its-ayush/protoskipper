@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from protoskipper import __version__
+from protoskipper.core.audit import verify_log
 from protoskipper.core.capture.pcapng import read_pcapng
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
@@ -161,6 +162,13 @@ class MainWindow(QMainWindow):
         capture_menu.addAction(self._action_capture_save)
         capture_menu.addSeparator()
         capture_menu.addAction(self._action_capture_open)
+
+        # Audit submenu (P2.B.1)
+        self._action_audit_verify = QAction("&Verify Audit Log…", self)
+        self._action_audit_verify.triggered.connect(self._on_audit_verify)
+
+        audit_menu = menu.addMenu("&Audit")
+        audit_menu.addAction(self._action_audit_verify)
 
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self._action_about)
@@ -538,6 +546,31 @@ class MainWindow(QMainWindow):
         self._action_disconnect.setEnabled(
             not active and self._currently_selected_session() is not None
         )
+
+    # ---- P2.B.1 audit verify -------------------------------------------
+
+    def _on_audit_verify(self) -> None:
+        """File → Audit → Verify Audit Log…"""
+        audit_dir = self._audit_dir
+        start_dir = str(audit_dir) if audit_dir else str(Path.home())
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Verify Audit Log",
+            start_dir,
+            "SQLite audit logs (*.db *.sqlite *.sqlite3);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            ok, message = verify_log(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Verification error", str(exc))
+            return
+        if ok:
+            QMessageBox.information(self, "Audit Log: VERIFIED", message)
+        else:
+            QMessageBox.warning(self, "Audit Log: FAILED", message)
 
     # ---- error / failure surfaces --------------------------------------
 
