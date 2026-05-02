@@ -165,3 +165,71 @@ def test_frame_capture_produces_tx_and_rx(modbus_simulator) -> None:
         assert isinstance(payload, bytes) and len(payload) > 0, (
             f"{direction} payload is empty or wrong type: {payload!r}"
         )
+
+
+def test_reconnect_after_transport_drop(modbus_simulator) -> None:
+    """P1.E.2: After a transport drop the driver reconnects and the next read succeeds.
+
+    Simulation strategy: inject a broken client into the session, then
+    configure the reconnect factory to return the original real client so
+    the retry succeeds without needing a second network listener.
+    """
+    from unittest.mock import MagicMock
+
+    host, port = modbus_simulator
+
+    drv = ModbusTcpDriver()
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address=f"{host}:{port}/unit=1",
+        label="sim",
+    )
+
+    ref = ObjectRef(
+        device=device,
+        object_id="holding:0",
+        data_type="uint16",
+        access=Access.READ_WRITE,
+        label="hold0",
+    )
+
+    with (
+        tempfile.TemporaryDirectory() as td,
+        open_session(
+            drv,
+            device,
+            profile=SessionProfile.LAB,
+            operator="ci@datasailors.io",
+            audit_dir=Path(td),
+            confirm=lambda i, p: True,
+        ) as session,
+    ):
+        ds = session.driver_session
+
+        # 1. Confirm the session works normally.
+        r1 = ds.read(ref)
+        assert r1.quality.value == "good", f"Pre-drop read failed: {r1.error}"
+
+        # 2. Inject a broken client so the next read raises (simulates a
+        #    TCP connection drop mid-session).
+        broken_client = MagicMock()
+        broken_client.read_holding_registers.side_effect = OSError("Connection reset")
+        # Store a reference to the real client so the reconnect factory
+        # can return it as the "reconnected" client.
+        real_client = ds._client  # type: ignore[union-attr]
+        ds._client = broken_client  # type: ignore[union-attr]
+
+        # Also override the reconnect factory to return the real client.
+        ds._reconnect_factory = lambda: real_client  # type: ignore[union-attr]
+
+        # 3. The read with the broken client must return BAD quality.
+        r2 = ds.read(ref)
+        assert r2.quality.value == "bad", f"Expected BAD quality after drop, got {r2.quality}"
+        assert r2.error, "Expected a non-empty error message"
+
+        # 4. After the reconnect factory restored the real client, the
+        #    next read should return GOOD quality.
+        r3 = ds.read(ref)
+        assert r3.quality.value == "good", (
+            f"Expected GOOD quality after reconnect, got {r3.quality}: {r3.error}"
+        )

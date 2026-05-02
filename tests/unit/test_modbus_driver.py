@@ -449,3 +449,91 @@ def test_driver_session_abc_abort_is_noop_by_default() -> None:
     # Verify the method exists and is callable (it's a concrete no-op default).
     assert hasattr(DriverSession, "abort")
     assert callable(DriverSession.abort)
+
+
+# ---------------------------------------------------------------------------
+# P1.E.2 — one-shot reconnect on transport failure
+# ---------------------------------------------------------------------------
+
+
+def test_read_reconnects_once_on_transport_exception() -> None:
+    """When read() hits a transport exception, it tries reconnect once and retries."""
+    from unittest.mock import MagicMock
+
+    from protoskipper.builtin_drivers.modbus.driver import _ModbusSession
+    from protoskipper.core.driver import Access, DeviceRef, Quality
+
+    # First client raises on every read (simulates dropped connection).
+    broken_client = MagicMock()
+    broken_client.read_holding_registers.side_effect = OSError("Connection reset")
+
+    # Fresh client returns a valid response.
+    fresh_resp = MagicMock()
+    fresh_resp.isError.return_value = False
+    fresh_resp.registers = [42]
+    fresh_client = MagicMock()
+    fresh_client.read_holding_registers.return_value = fresh_resp
+
+    def _reconnect_factory() -> object:
+        return fresh_client
+
+    device = DeviceRef(protocol="modbus.tcp", address="127.0.0.1:502", label="test", metadata={})
+    session = _ModbusSession(
+        client=broken_client,  # type: ignore[arg-type]
+        unit=1,
+        device=device,
+        safety=MagicMock(),
+        reconnect_factory=_reconnect_factory,
+    )
+
+    from protoskipper.core.driver import ObjectRef
+
+    ref = ObjectRef(
+        device=device,
+        object_id="holding:0",
+        data_type="uint16",
+        access=Access.READ_ONLY,
+        label="r",
+    )
+    result = session.read(ref)
+
+    # After reconnect, the retry succeeds.
+    assert result.quality == Quality.GOOD
+    assert result.value == 42
+    # The session now uses the fresh client.
+    assert session._client is fresh_client  # type: ignore[union-attr]
+
+
+def test_read_returns_bad_when_reconnect_also_fails() -> None:
+    """If the reconnect factory returns None, read() returns BAD quality."""
+    from unittest.mock import MagicMock
+
+    from protoskipper.builtin_drivers.modbus.driver import _ModbusSession
+    from protoskipper.core.driver import Access, DeviceRef, ObjectRef, Quality
+
+    broken_client = MagicMock()
+    broken_client.read_holding_registers.side_effect = OSError("Connection refused")
+
+    def _always_fail_reconnect() -> object:
+        return None  # reconnect failed
+
+    device = DeviceRef(protocol="modbus.tcp", address="127.0.0.1:502", label="test", metadata={})
+    session = _ModbusSession(
+        client=broken_client,  # type: ignore[arg-type]
+        unit=1,
+        device=device,
+        safety=MagicMock(),
+        reconnect_factory=_always_fail_reconnect,
+    )
+
+    ref = ObjectRef(
+        device=device,
+        object_id="holding:0",
+        data_type="uint16",
+        access=Access.READ_ONLY,
+        label="r",
+    )
+    result = session.read(ref)
+
+    assert result.quality == Quality.BAD
+    assert result.error is not None

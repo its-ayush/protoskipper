@@ -398,7 +398,21 @@ class ModbusTcpDriver(ProtocolDriver):
         client = _make_capturing_tcp_client(host=host, port=port, timeout=timeout)
         if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open Modbus TCP socket to {host}:{port}")
-        return _ModbusSession(client=client, unit=unit, device=device, safety=safety)
+
+        def _reconnect() -> object:
+            new_client = _make_capturing_tcp_client(host=host, port=port, timeout=timeout)
+            if not new_client.connect():  # type: ignore[union-attr]
+                _logger.warning("Modbus TCP reconnect failed: %s:%d", host, port)
+                return None
+            return new_client
+
+        return _ModbusSession(
+            client=client,
+            unit=unit,
+            device=device,
+            safety=safety,
+            reconnect_factory=_reconnect,
+        )
 
 
 def _probe_tcp_host(
@@ -632,11 +646,27 @@ class ModbusRtuDriver(ProtocolDriver):
         )
         if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open serial port {cfg.port}")
+
+        def _reconnect() -> object:
+            new_client = _make_capturing_serial_client(
+                port=cfg.port,
+                baudrate=cfg.baudrate,
+                parity=cfg.parity,
+                stopbits=cfg.stopbits,
+                bytesize=cfg.bytesize,
+                timeout=timeout,
+            )
+            if not new_client.connect():  # type: ignore[union-attr]
+                _logger.warning("Modbus RTU reconnect failed: %s", cfg.port)
+                return None
+            return new_client
+
         return _ModbusSession(
             client=client,
             unit=cfg.unit,
             device=device,
             safety=safety,
+            reconnect_factory=_reconnect,
         )
 
     def parse_address(self, address: str) -> DeviceRef:
@@ -764,11 +794,16 @@ class _ModbusSession(DriverSession):
         unit: int,
         device: DeviceRef,
         safety: SafetyContext,
+        reconnect_factory: object = None,
     ) -> None:
         self._client = client
         self._unit = unit
         self.device = device
         self.safety = safety
+        # Callable[[], ModbusBaseSyncClient | None] — returns a connected
+        # client or None if reconnect failed. Set at construction time by the
+        # driver's connect() so this session can recover from transport drops.
+        self._reconnect_factory = reconnect_factory
 
     def attach_frame_sink(self, sink: CaptureSink | None) -> None:
         """Override: store sink and wire it into the capturing transport."""
@@ -776,6 +811,34 @@ class _ModbusSession(DriverSession):
         # _CapturingMixin exposes _capture_sink; plain clients just ignore this.
         if isinstance(self._client, _CapturingMixin):
             self._client._capture_sink = sink
+
+    # -- reconnect --------------------------------------------------------
+    def _try_reconnect(self) -> bool:
+        """Attempt a one-shot reconnect using the stored factory.
+
+        Returns ``True`` if the reconnect succeeded and ``self._client`` now
+        points to a fresh connected client. Returns ``False`` if no factory is
+        registered or if the reconnect attempt itself fails.
+        """
+        if self._reconnect_factory is None:
+            return False
+        try:
+            new_client = self._reconnect_factory()  # type: ignore[call-arg]
+        except Exception as exc:
+            _logger.warning("Modbus reconnect failed: %s", exc)
+            return False
+        if new_client is None:
+            return False
+        # Re-wire the frame sink onto the new client.
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self._client.close()
+        self._client = new_client  # type: ignore[assignment]
+        if isinstance(self._client, _CapturingMixin):
+            self._client._capture_sink = getattr(self, "_frame_sink", None)
+        _logger.info("Modbus reconnect succeeded for %s", self.device.address)
+        return True
 
     # -- enumerate --------------------------------------------------------
     def enumerate_objects(self) -> Iterator[ObjectRef]:
@@ -978,6 +1041,88 @@ class _ModbusSession(DriverSession):
             raw_bytes=None,
         )
 
+    def _read_once(
+        self,
+        ref: ObjectRef,
+        table: str,
+        address: int,
+        count: int,
+        ts: Any,
+    ) -> ReadResult:
+        """Perform one Modbus read without the reconnect retry logic.
+
+        Used by :meth:`read` as the retry call after a successful reconnect,
+        so we don't loop back into the reconnect path if the retry also fails.
+        """
+        try:
+            unit = _u(self._unit)
+            if table == "holding":
+                resp = self._client.read_holding_registers(address=address, count=count, **unit)
+            elif table == "input":
+                resp = self._client.read_input_registers(address=address, count=count, **unit)
+            elif table == "coils":
+                resp = self._client.read_coils(address=address, count=count, **unit)
+            elif table == "discrete":
+                resp = self._client.read_discrete_inputs(address=address, count=count, **unit)
+            else:  # pragma: no cover - guarded above
+                raise EncodingError(f"Unhandled table {table!r}")
+        except Exception as exc:
+            _logger.warning("Modbus read retry failed for %s: %s", ref.object_id, exc)
+            return ReadResult(
+                object_ref=ref,
+                value=None,
+                quality=Quality.BAD,
+                timestamp=ts,
+                error=repr(exc),
+            )
+
+        if resp.isError():
+            return ReadResult(
+                object_ref=ref,
+                value=None,
+                quality=Quality.BAD,
+                timestamp=ts,
+                error=str(resp),
+            )
+
+        dtype = ref.data_type
+        value: Any
+        if table in {"coils", "discrete"}:
+            value = list(resp.bits)[:count]
+            value = value[0] if count == 1 else value
+        else:
+            raw_regs = list(resp.registers)
+            bit_index = ref.metadata.get("bit")
+            if bit_index is not None:
+                value = decode_bit(raw_regs[0], int(bit_index))
+            elif dtype in ("ascii", "utf16"):
+                byte_order = str(ref.metadata.get("byte_order", "big"))
+                value = decode_string(raw_regs, dtype, byte_order)
+            elif dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
+                byte_order = str(ref.metadata.get("byte_order", "big"))
+                word_order = str(ref.metadata.get("word_order", "big"))
+                try:
+                    value = decode_registers(raw_regs, dtype, byte_order, word_order)
+                except Exception as exc:
+                    return ReadResult(
+                        object_ref=ref,
+                        value=None,
+                        quality=Quality.BAD,
+                        timestamp=ts,
+                        error=repr(exc),
+                    )
+            else:
+                value = raw_regs[0] if len(raw_regs) == 1 else raw_regs
+
+        value = self._apply_read_scale(ref, value)
+        return ReadResult(
+            object_ref=ref,
+            value=value,
+            quality=Quality.GOOD,
+            timestamp=ts,
+            raw_bytes=None,
+        )
+
     def read(self, ref: ObjectRef) -> ReadResult:
         table, address, parsed_count = _parse_object_id(ref.object_id)
         ts = datetime.now(timezone.utc)
@@ -1003,6 +1148,10 @@ class _ModbusSession(DriverSession):
                 raise EncodingError(f"Unhandled table {table!r}")
         except Exception as exc:
             _logger.warning("Modbus read failed for %s: %s", ref.object_id, exc)
+            # One-shot reconnect: if the transport dropped, try to reconnect
+            # and retry the read once.  If that also fails, return BAD quality.
+            if self._try_reconnect():
+                return self._read_once(ref, table, address, count, ts)
             return ReadResult(
                 object_ref=ref,
                 value=None,
