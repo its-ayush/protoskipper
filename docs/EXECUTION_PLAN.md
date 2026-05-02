@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 44 / 92 tasks complete (47.8%)**
+> **Overall Progress: 45 / 92 tasks complete (48.9%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -779,7 +779,7 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
   * Open loads a pcapng into the packet view (read-only mode disables
     write actions on every panel).
 
-### P2.A.3 Replay disables write paths
+### ✅ P2.A.3 Replay disables write paths
 
 * **Acceptance criteria:**
   * In replay mode every write button on every panel and dialog is
