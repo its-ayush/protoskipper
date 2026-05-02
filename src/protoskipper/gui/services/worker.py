@@ -122,7 +122,7 @@ class DriverWorker(QObject):
         finally:
             self.discovery_finished.emit(n_found)
 
-    @Slot(DeviceRef, object, str, str)
+    @Slot(object, object, str, str)
     def open(
         self,
         device: DeviceRef,

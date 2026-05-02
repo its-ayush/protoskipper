@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread
+from PySide6.QtCore import Q_ARG, QMetaObject, QObject, Qt, QThread, QTimer, Slot
 
 from protoskipper.core.driver import (
     DeviceRef,
@@ -52,6 +52,10 @@ class SessionManager(QObject):
         self._audit_dir = audit_dir
         self._workers: dict[SessionId, _WorkerHandle] = {}
         self._drivers: dict[str, ProtocolDriver] = {}
+        # Handles whose threads have been asked to stop but have not yet exited.
+        # Holding them here prevents premature GC of the C++ QThread object while
+        # the thread is still running (PySide6 uses weak refs in signal connections).
+        self._stopping: set[_WorkerHandle] = set()
 
     # ---- driver registry --------------------------------------------------
 
@@ -98,15 +102,24 @@ class SessionManager(QObject):
         thread = QThread()
         worker.moveToThread(thread)
 
+        # Explicit QueuedConnection: Python lambdas have no QObject affinity, so
+        # PySide6 defaults to DirectConnection even across threads. We must force
+        # QueuedConnection to ensure these callbacks run on the main thread, not the
+        # worker thread.
         worker.discovery_progress.connect(
-            lambda device: self._state.record_device_discovered(device)
+            lambda device: self._state.record_device_discovered(device),
+            Qt.QueuedConnection,
         )
         worker.discovery_finished.connect(
             lambda count, pid=protocol_id, did=discovery_id: self._on_discovery_finished(
                 did, pid, count
-            )
+            ),
+            Qt.QueuedConnection,
         )
-        worker.error_raised.connect(lambda op, msg: self._state.record_error(op, msg))
+        worker.error_raised.connect(
+            lambda op, msg: self._state.record_error(op, msg),
+            Qt.QueuedConnection,
+        )
 
         self._state.discovery_started.emit(protocol_id)
         thread.start()
@@ -161,6 +174,10 @@ class SessionManager(QObject):
         worker.moveToThread(thread)
 
         # Wire worker signals into ApplicationState.record_* mutators.
+        # Explicit QueuedConnection on every lambda: Python callables have no QObject
+        # thread affinity, so PySide6 would otherwise use DirectConnection and call
+        # these lambdas on the worker thread — which would then mutate ApplicationState
+        # (a main-thread QObject) from the wrong thread.
         worker.session_opened.connect(
             lambda sid=session_id, dev=device, prof=profile, op=operator: (
                 self._state.record_session_opened(
@@ -171,44 +188,52 @@ class SessionManager(QObject):
                         operator=op,
                     )
                 )
-            )
+            ),
+            Qt.QueuedConnection,
         )
         worker.objects_enumerated.connect(
             lambda objects, sid=session_id: self._state.record_objects_enumerated(
                 sid, list(objects)
-            )
+            ),
+            Qt.QueuedConnection,
         )
         worker.read_completed.connect(
-            lambda result, sid=session_id: self._state.record_read_completed(sid, result)
+            lambda result, sid=session_id: self._state.record_read_completed(sid, result),
+            Qt.QueuedConnection,
         )
         worker.write_intent_prepared.connect(
-            lambda intent, sid=session_id: self._state.record_write_intent_prepared(sid, intent)
+            lambda intent, sid=session_id: self._state.record_write_intent_prepared(sid, intent),
+            Qt.QueuedConnection,
         )
         worker.write_committed.connect(
-            lambda result, sid=session_id: self._state.record_write_completed(sid, result)
+            lambda result, sid=session_id: self._state.record_write_completed(sid, result),
+            Qt.QueuedConnection,
         )
         worker.write_denied.connect(
-            lambda intent, sid=session_id: self._state.record_write_denied(sid, intent)
+            lambda intent, sid=session_id: self._state.record_write_denied(sid, intent),
+            Qt.QueuedConnection,
         )
-        worker.frame_captured.connect(self._state.record_frame_captured)
-        worker.closed.connect(lambda sid=session_id: self._on_worker_closed(sid))
+        worker.frame_captured.connect(
+            self._state.record_frame_captured,
+            Qt.QueuedConnection,
+        )
+        worker.closed.connect(
+            lambda sid=session_id: self._on_worker_closed(sid),
+            Qt.QueuedConnection,
+        )
         worker.error_raised.connect(
-            lambda op, msg, sid=session_id: self._on_worker_error(sid, op, msg)
+            lambda op, msg, sid=session_id: self._on_worker_error(sid, op, msg),
+            Qt.QueuedConnection,
         )
 
         thread.start()
         self._workers[session_id] = _WorkerHandle(worker=worker, thread=thread)
 
         # Schedule the open() slot to run on the worker thread.
-        QMetaObject.invokeMethod(
-            worker,
-            "open",
-            Qt.QueuedConnection,
-            Q_ARG(DeviceRef, device),
-            Q_ARG(object, profile),
-            Q_ARG(str, operator),
-            Q_ARG(str, str(self._audit_dir)),
-        )
+        # QTimer.singleShot with a context QObject fires the callable on the context's
+        # thread — no Q_ARG metatype serialization needed for arbitrary Python objects.
+        _w, _d, _p, _op, _ad = worker, device, profile, operator, str(self._audit_dir)
+        QTimer.singleShot(0, _w, lambda: _w.open(_d, _p, _op, _ad))
 
         return session_id
 
@@ -232,31 +257,18 @@ class SessionManager(QObject):
 
     def read(self, session_id: SessionId, ref: ObjectRef) -> None:
         handle = self._require(session_id)
-        QMetaObject.invokeMethod(
-            handle.worker,
-            "read",
-            Qt.QueuedConnection,
-            Q_ARG(object, ref),
-        )
+        _w, _r = handle.worker, ref
+        QTimer.singleShot(0, _w, lambda: _w.read(_r))
 
     def prepare_write(self, session_id: SessionId, ref: ObjectRef, value: Any) -> None:
         handle = self._require(session_id)
-        QMetaObject.invokeMethod(
-            handle.worker,
-            "prepare_write",
-            Qt.QueuedConnection,
-            Q_ARG(object, ref),
-            Q_ARG(object, value),
-        )
+        _w, _r, _v = handle.worker, ref, value
+        QTimer.singleShot(0, _w, lambda: _w.prepare_write(_r, _v))
 
     def commit_write(self, session_id: SessionId, intent: WriteIntent) -> None:
         handle = self._require(session_id)
-        QMetaObject.invokeMethod(
-            handle.worker,
-            "commit_write",
-            Qt.QueuedConnection,
-            Q_ARG(object, intent),
-        )
+        _w, _i = handle.worker, intent
+        QTimer.singleShot(0, _w, lambda: _w.commit_write(_i))
 
     # ---- internal --------------------------------------------------------
 
@@ -284,20 +296,39 @@ class SessionManager(QObject):
 
     def _teardown_thread(self, handle: _WorkerHandle) -> None:
         """Stop and clean up a worker thread. Safe to call from any thread."""
-        # Remove from registry first so no new requests arrive.
+        # Remove from active registry first so no new requests are dispatched.
         for sid, h in list(self._workers.items()):
             if h is handle:
                 del self._workers[sid]
                 break
+
+        # Move to _stopping BEFORE quit() so the handle is alive for the whole
+        # shutdown sequence, preventing premature GC of the C++ QThread.
+        self._stopping.add(handle)
+        # Connect BEFORE quit() to guarantee we never miss the finished signal.
+        handle.thread.finished.connect(self._on_thread_finished_slot)
         handle.thread.quit()
-        # Schedule deferred deletion via the finished signal — the canonical Qt
-        # pattern for worker-thread cleanup that is safe from any thread.
-        handle.thread.finished.connect(handle.worker.deleteLater)
-        handle.thread.finished.connect(handle.thread.deleteLater)
-        # Only call wait() from the main thread. Calling it from the worker
-        # thread itself raises QThread::wait: Thread tried to wait on itself.
+
         if QThread.currentThread() is not handle.thread and not handle.thread.wait(5_000):
             _logger.warning("Worker thread did not exit within 5s; abandoning")
+
+    @Slot()
+    def _on_thread_finished_slot(self) -> None:
+        """Runs on the main thread (QueuedConnection) when a worker thread finishes.
+
+        Schedules the C++ QObject cleanup via deleteLater and releases the handle
+        from the stopping set so the Python wrappers can be GC'd safely.
+        """
+        sender_thread = self.sender()
+        handle = next(
+            (h for h in self._stopping if h.thread is sender_thread),
+            None,
+        )
+        if handle is None:
+            return
+        self._stopping.discard(handle)
+        handle.worker.deleteLater()
+        handle.thread.deleteLater()
 
     def shutdown(self) -> None:
         """Synchronously stop all sessions. Called from MainWindow.closeEvent()."""
@@ -310,6 +341,10 @@ class SessionManager(QObject):
         for handle in handles:
             if not handle.thread.wait(3_000):
                 _logger.warning("Worker thread did not finish within 3s during shutdown")
+            else:
+                # Thread has stopped; schedule safe deferred deletion of C++ objects.
+                handle.worker.deleteLater()
+                handle.thread.deleteLater()
 
 
 class _WorkerHandle:
