@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 35 / 92 tasks complete (38.0%)**
+> **Overall Progress: 38 / 92 tasks complete (41.3%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -648,7 +648,7 @@ type support".
 
 ## P1.D — RTU hardware support
 
-### P1.D.1 Serial-port enumeration in connection dialogs
+### ✅ P1.D.1 Serial-port enumeration in connection dialogs
 
 * **Goal:** New Connection and Probe Network dialogs offer a dropdown of
   detected serial ports (`pyserial.tools.list_ports`).
@@ -662,14 +662,14 @@ type support".
 * **Tests required:**
   * Unit (mock `list_ports`): test the dropdown population logic.
 
-### P1.D.2 RTU manual hardware test plan
+### ✅ P1.D.2 RTU manual hardware test plan
 
 * **Files touched:** `docs/manual-tests/m_modbus_rtu_hw.md` (new).
 * **Acceptance criteria:** Step-by-step script for testing against a
   USB-RS485 adapter and a known PLC. Includes expected baud-rate /
   parity combos and reproducible failure modes.
 
-### P1.D.3 RTU integration test using a virtual serial port
+### ✅ P1.D.3 RTU integration test using a virtual serial port
 
 * **Goal:** Linux-only integration test using `socat` to create a
   virtual port pair, simulator on one end, driver on the other.
