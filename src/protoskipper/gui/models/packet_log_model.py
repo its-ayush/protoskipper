@@ -19,16 +19,17 @@ from protoskipper.gui.services.types import CapturedFrame, Direction, SessionId
 from protoskipper.gui.theme import active_theme
 
 COL_TIME = 0
-COL_DIR = 1
-COL_LEN = 2
-COL_DECODED = 3
-COL_HEX = 4
+COL_DELTA = 1
+COL_DIR = 2
+COL_LEN = 3
+COL_DECODED = 4
+COL_HEX = 5
 
 DEFAULT_MAX_ROWS = 10_000
 
 
 class PacketLogModel(QAbstractTableModel):
-    HEADERS = ("Time", "Dir", "Len", "Decoded", "Hex")
+    HEADERS = ("Time", "Δ ms", "Dir", "Len", "Decoded", "Hex")
 
     def __init__(
         self,
@@ -115,6 +116,12 @@ class PacketLogModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             if col == COL_TIME:
                 return _format_time(frame.timestamp)
+            if col == COL_DELTA:
+                if index.row() == 0:
+                    return "0"
+                prev = frames[index.row() - 1]
+                delta_ms = (frame.timestamp - prev.timestamp).total_seconds() * 1000
+                return f"{delta_ms:+.1f}" if delta_ms != 0 else "0"
             if col == COL_DIR:
                 return "TX→" if frame.direction == Direction.TX else "←RX"
             if col == COL_LEN:
@@ -128,6 +135,9 @@ class PacketLogModel(QAbstractTableModel):
         if role == Qt.ForegroundRole and col == COL_DIR:
             theme = active_theme()
             return theme.direction_tx if frame.direction == Direction.TX else theme.direction_rx
+
+        if role == Qt.TextAlignmentRole and col == COL_DELTA:
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         return None
 

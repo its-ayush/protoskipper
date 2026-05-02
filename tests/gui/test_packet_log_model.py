@@ -79,10 +79,10 @@ def test_data_returns_direction_string(state: ApplicationState, sid: SessionId) 
 
     model = PacketLogModel(state)
     state.record_frame_captured(_frame(sid, Direction.RX))
-    idx = model.index(0, 1)  # COL_DIR
+    idx = model.index(0, 2)  # COL_DIR
     assert model.data(idx, Qt.DisplayRole) == "←RX"
 
 
 def test_column_count_is_five(state: ApplicationState) -> None:
     model = PacketLogModel(state)
-    assert model.columnCount() == 5
+    assert model.columnCount() == 6
