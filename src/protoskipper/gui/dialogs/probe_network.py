@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from protoskipper.core.driver import DeviceRef
 from protoskipper.core.plugin_loader import load_protocol_drivers
+from protoskipper.gui.dialogs._serial_ports import list_serial_ports
 from protoskipper.gui.services.app_state import ApplicationState
 from protoskipper.gui.services.session_manager import SessionManager
 from protoskipper.gui.services.types import SessionId
@@ -88,6 +89,7 @@ class ProbeNetworkDialog(QDialog):
         self._connect_signals()
         self._update_buttons()
         self._update_target_hint()
+        self._on_protocol_changed(self._protocol_combo.currentIndex())
 
     # ---- ui construction -------------------------------------------------
 
@@ -102,6 +104,17 @@ class ProbeNetworkDialog(QDialog):
         self._target_edit.setPlaceholderText("Address / range / bus")
         form_box.addRow("Protocol:", self._protocol_combo)
         form_box.addRow("Target:", self._target_edit)
+
+        # Serial-port dropdown (shown only for RTU-type protocols).
+        self._port_combo = QComboBox(self)
+        self._port_combo.setEditable(True)
+        self._port_combo.lineEdit().setPlaceholderText(  # type: ignore[union-attr]
+            "Select or type port path"
+        )
+        self._port_combo_label = QLabel("Serial port:", self)
+        self._populate_serial_ports()
+        self._port_combo.currentTextChanged.connect(self._on_port_selected)
+        form_box.addRow(self._port_combo_label, self._port_combo)
         outer.addLayout(form_box)
 
         self._hint_label = QLabel("", self)
@@ -151,8 +164,16 @@ class ProbeNetworkDialog(QDialog):
             label = f"{getattr(cls, 'DISPLAY_NAME', proto_id)}  -  {proto_id}"
             self._protocol_combo.addItem(label, proto_id)
 
+    def _populate_serial_ports(self) -> None:
+        """Fill the serial-port combo from pyserial (best-effort)."""
+        self._port_combo.clear()
+        self._port_combo.addItem("", "")
+        for device, desc in list_serial_ports():
+            self._port_combo.addItem(f"{device}  —  {desc}", device)
+
     def _connect_signals(self) -> None:
         self._protocol_combo.currentIndexChanged.connect(self._update_target_hint)
+        self._protocol_combo.currentIndexChanged.connect(self._on_protocol_changed)
         self._start_button.clicked.connect(self._on_start)
         self._cancel_button.clicked.connect(self._on_cancel)
         self._clear_button.clicked.connect(self._on_clear)
@@ -164,6 +185,23 @@ class ProbeNetworkDialog(QDialog):
         self._state.device_discovered.connect(self._on_device_discovered)
         self._state.discovery_finished.connect(self._on_discovery_finished)
         self._state.error_raised.connect(self._on_error)
+
+    # ---- helpers ---------------------------------------------------------
+
+    def _on_protocol_changed(self, _index: int) -> None:
+        """Show or hide the serial-port combo based on the selected protocol."""
+        proto_id: str | None = self._protocol_combo.currentData()
+        is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        self._port_combo.setVisible(is_rtu)
+        self._port_combo_label.setVisible(is_rtu)
+
+    def _on_port_selected(self, text: str) -> None:
+        """Mirror the selected port device path to the target field."""
+        device = self._port_combo.currentData()
+        if device:
+            self._target_edit.setText(str(device))
+        elif text.strip():
+            self._target_edit.setText(text.strip())
 
     # ---- helpers ---------------------------------------------------------
 
