@@ -74,8 +74,12 @@ class ObjectBrowserPanel(QWidget):
         layout.addWidget(self._toolbar)
         layout.addWidget(self._view)
 
+        # P2.A.3: initialise before _update_actions() which reads it.
+        self._replay_mode: bool = False
         self._update_actions()
         self._view.selectionModel().selectionChanged.connect(self._update_actions)
+        # P2.A.3: wire signal after init so it can't fire before _replay_mode exists.
+        self._state.replay_mode_changed.connect(self._on_replay_mode_changed)
 
     def set_session(self, session_id: str | None) -> None:
         sid = SessionId(session_id) if session_id else None
@@ -110,12 +114,21 @@ class ObjectBrowserPanel(QWidget):
         obj = self._selected_object()
         is_writable = obj is not None and obj.access.value != "ro"
 
-        self._read_all_button.setEnabled(is_open)
-        self._read_button.setEnabled(is_open and has_selection)
-        self._write_button.setEnabled(is_open and has_selection and is_writable)
-        self._watch_button.setEnabled(has_selection)
+        self._read_all_button.setEnabled(is_open and not self._replay_mode)
+        self._read_button.setEnabled(is_open and has_selection and not self._replay_mode)
+        self._write_button.setEnabled(
+            is_open and has_selection and is_writable and not self._replay_mode
+        )
+        self._watch_button.setEnabled(has_selection and not self._replay_mode)
+        _tooltip = "Replay mode — writes are disabled" if self._replay_mode else ""
+        self._write_button.setToolTip(_tooltip)
+        self._watch_button.setToolTip(_tooltip)
 
     # ---- handlers --------------------------------------------------------
+
+    def _on_replay_mode_changed(self, active: bool) -> None:
+        self._replay_mode = active
+        self._update_actions()
 
     def _on_read_clicked(self) -> None:
         obj = self._selected_object()

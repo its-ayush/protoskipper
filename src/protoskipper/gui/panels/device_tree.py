@@ -74,8 +74,14 @@ class DeviceTreePanel(QWidget):
         # Auto-expand newly inserted rows so the user does not have to dig
         # into each protocol after every discovery / connect.
         self._model.rowsInserted.connect(lambda parent, _first, _last: self._view.expand(parent))
+        # P2.A.3: track replay mode so context menu Write action is disabled.
+        self._replay_mode: bool = False
+        self._state.replay_mode_changed.connect(self._on_replay_mode_changed)
 
     # ---- selection -------------------------------------------------------
+
+    def _on_replay_mode_changed(self, active: bool) -> None:
+        self._replay_mode = active
 
     def _on_current_changed(self, current, _previous) -> None:
         if not current.isValid():
@@ -114,11 +120,11 @@ class DeviceTreePanel(QWidget):
             disconnect_action.triggered.connect(
                 lambda _checked=False, sid=payload.session_id: self.disconnect_requested.emit(sid)
             )
-            disconnect_action.setEnabled(payload.is_open)
+            disconnect_action.setEnabled(payload.is_open and not self._replay_mode)
             menu.addAction(disconnect_action)
 
             import_action = QAction("Import register map…", self)
-            import_action.setEnabled(payload.is_open)
+            import_action.setEnabled(payload.is_open and not self._replay_mode)
             import_action.triggered.connect(
                 lambda _checked=False, sid=payload.session_id: self._import_register_map(
                     SessionId(sid)
@@ -138,7 +144,9 @@ class DeviceTreePanel(QWidget):
                 menu.addAction(read_action)
 
                 write_action = QAction("Write…", self)
-                write_action.setEnabled(payload.access.value != "ro")
+                write_action.setEnabled(payload.access.value != "ro" and not self._replay_mode)
+                if self._replay_mode:
+                    write_action.setToolTip("Replay mode — writes are disabled")
                 write_action.triggered.connect(
                     lambda _checked=False, sid=session_info.session_id, ref=payload: (
                         self.write_requested.emit(sid, ref)
@@ -149,6 +157,9 @@ class DeviceTreePanel(QWidget):
                 menu.addSeparator()
 
                 watch_action = QAction("Add to Watchlist", self)
+                watch_action.setEnabled(not self._replay_mode)
+                if self._replay_mode:
+                    watch_action.setToolTip("Replay mode — writes are disabled")
                 watch_action.triggered.connect(
                     lambda _checked=False, sid=session_info.session_id, ref=payload: (
                         self.add_to_watchlist_requested.emit(sid, ref)

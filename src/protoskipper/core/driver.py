@@ -191,14 +191,21 @@ class SafetyContext:
         profile: SessionProfile,
         confirm_callback: ConfirmCallback,
         audit_callback: AuditCallback,
+        replay_mode: bool = False,
     ) -> None:
         self._profile = profile
         self._confirm = confirm_callback
         self._audit = audit_callback
+        self._replay_mode = replay_mode
 
     @property
     def profile(self) -> SessionProfile:
         return self._profile
+
+    @property
+    def replay_mode(self) -> bool:
+        """True when the context is operating in replay (read-only) mode."""
+        return self._replay_mode
 
     def require_write_authorization(self, intent: WriteIntent) -> bool:
         """Block until the operator authorises (or denies) the write.
@@ -206,7 +213,13 @@ class SafetyContext:
         Returns ``True`` if the write may proceed, ``False`` if the operator
         denied it. Either outcome is recorded in the audit log; only an
         authorised intent is later paired with a :class:`WriteResult`.
+
+        Always returns ``False`` (and records ``replay_mode_blocked``) when
+        :attr:`replay_mode` is ``True``.
         """
+        if self._replay_mode:
+            self._audit(event="replay_mode_blocked", intent=intent)
+            return False
         authorized = self._confirm(intent, self._profile)
         self._audit(
             event="write_authorization",
