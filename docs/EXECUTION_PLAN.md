@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 25 / 92 tasks complete (27.2%)**
+> **Overall Progress: 29 / 92 tasks complete (31.5%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -510,7 +510,7 @@ type support".
 
 ## P1.A — Register-map import
 
-### P1.A.1 CSV register-map format spec
+### ✅ P1.A.1 CSV register-map format spec
 
 * **Goal:** Define a documented, versioned CSV format ProtoSkipper will
   accept for Modbus register maps.
@@ -524,7 +524,7 @@ type support".
     order, packed bitfield).
   * Behaviour for malformed rows defined (skip with warning).
 
-### P1.A.2 CSV importer implementation
+### ✅ P1.A.2 CSV importer implementation
 
 * **Goal:** `protoskipper.builtin_drivers.modbus.regmap.load_csv(path)`
   returns a list of `ObjectRef` instances.
@@ -538,7 +538,7 @@ type support".
     `byte_order`, `word_order`, `bit` for the read/write code paths.
   * Coverage ≥ 95%.
 
-### P1.A.3 GUI: import register map per session
+### ✅ P1.A.3 GUI: import register map per session
 
 * **Goal:** Right-click a session in the device tree → "Import register
   map…" → file dialog → CSV → object browser repopulates.
@@ -551,7 +551,7 @@ type support".
   * Re-import replaces the entire object list (does not append).
   * Importing an invalid CSV shows a non-blocking error dialog.
 
-### P1.A.4 Sample register maps shipped
+### ✅ P1.A.4 Sample register maps shipped
 
 * **Goal:** Three real-world sample CSVs in `examples/register-maps/`:
   Schneider PM5560, Siemens SENTRON PAC2200, ABB B23 meter.
