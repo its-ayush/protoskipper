@@ -192,3 +192,41 @@ def _registers_to_bytes(
     words = list(reversed(registers)) if word_order == "little" else list(registers)
     bo_char = "<" if byte_order == "little" else ">"
     return b"".join(struct.pack(f"{bo_char}H", w) for w in words)
+
+
+# ---------------------------------------------------------------------------
+# Bit-field helpers
+# ---------------------------------------------------------------------------
+
+
+def decode_bit(register: int, bit: int) -> bool:
+    """Extract a single bit from a 16-bit Modbus register.
+
+    Parameters
+    ----------
+    register:
+        Raw 16-bit unsigned register value.
+    bit:
+        Bit position, 0 = LSB, 15 = MSB.
+    """
+    return bool((register >> bit) & 1)
+
+
+def encode_bit(register: int, bit: int, value: bool) -> int:
+    """Set or clear a single bit in a 16-bit Modbus register.
+
+    Returns the modified 16-bit register value.  Used to implement
+    read-modify-write for holding-register bitfield objects.
+
+    Parameters
+    ----------
+    register:
+        Current 16-bit unsigned register value.
+    bit:
+        Bit position to modify, 0 = LSB, 15 = MSB.
+    value:
+        New bit value (True = set, False = clear).
+    """
+    if value:
+        return register | (1 << bit)
+    return register & ~(1 << bit) & 0xFFFF

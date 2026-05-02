@@ -44,7 +44,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from protoskipper.builtin_drivers.modbus.codec import (
     REGISTER_COUNTS,
+    decode_bit,
     decode_registers,
+    encode_bit,
     encode_value,
 )
 from protoskipper.core.driver import (
@@ -847,8 +849,12 @@ class _ModbusSession(DriverSession):
             value = value[0] if count == 1 else value
         else:
             raw_regs = list(resp.registers)
-            # Decode multi-register types through the codec.
-            if dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
+            bit_index = ref.metadata.get("bit")
+            if bit_index is not None:
+                # Bitfield: extract a single bit from the holding register.
+                value = decode_bit(raw_regs[0], int(bit_index))
+            elif dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
+                # Decode multi-register types through the codec.
                 byte_order = str(ref.metadata.get("byte_order", "big"))
                 word_order = str(ref.metadata.get("word_order", "big"))
                 try:
@@ -892,11 +898,21 @@ class _ModbusSession(DriverSession):
         dtype = ref.data_type
         byte_order = str(ref.metadata.get("byte_order", "big"))
         word_order = str(ref.metadata.get("word_order", "big"))
+        bit_index = ref.metadata.get("bit")
 
         try:
             if table == "holding":
                 codec_count = REGISTER_COUNTS.get(dtype, 0)
-                if codec_count > 1:
+                if bit_index is not None:
+                    # Bitfield: we need a read-modify-write; store the bit info.
+                    bool_value = bool(value)
+                    encoded = b"\xff\x00" if bool_value else b"\x00\x00"
+                    description = (
+                        f"Write holding[{address}] bit {bit_index} := {bool_value}"
+                        " (read-modify-write)"
+                    )
+                    extra_meta: dict = {"bit": int(bit_index), "rmw": True}
+                elif codec_count > 1:
                     # Multi-register type: encode through the codec.
                     registers = encode_value(float(value), dtype, byte_order, word_order)
                     encoded = b"".join(r.to_bytes(2, "big") for r in registers)
@@ -946,7 +962,21 @@ class _ModbusSession(DriverSession):
             unit = _u(self._unit)
             if table == "holding":
                 registers: list[int] | None = intent.metadata.get("registers")
-                if registers is not None and len(registers) > 1:
+                bit: int | None = intent.metadata.get("bit")
+                if bit is not None:
+                    # Read-modify-write for a bitfield object.
+                    read_resp = self._client.read_holding_registers(
+                        address=address, count=1, **unit
+                    )
+                    if read_resp.isError():
+                        raise RuntimeError(
+                            f"Read-modify-write: pre-read of holding[{address}] failed: {read_resp}"
+                        )
+                    current = next(iter(read_resp.registers))
+                    bool_value = intent.encoded_bytes == b"\xff\x00"
+                    new_register = encode_bit(current, bit, bool_value)
+                    resp = self._client.write_register(address=address, value=new_register, **unit)
+                elif registers is not None and len(registers) > 1:
                     # Multi-register write (float32, uint32, int32, …)
                     resp = self._client.write_registers(address=address, values=registers, **unit)
                 else:

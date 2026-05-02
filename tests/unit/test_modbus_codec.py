@@ -14,7 +14,9 @@ import struct
 import pytest
 
 from protoskipper.builtin_drivers.modbus.codec import (
+    decode_bit,
     decode_registers,
+    encode_bit,
     encode_value,
     required_register_count,
 )
@@ -268,3 +270,48 @@ class TestRoundTrip:
             assert decoded == pytest.approx(value, rel=1e-5)
         else:
             assert decoded == value
+
+
+# ---------------------------------------------------------------------------
+# Bit-field helpers
+# ---------------------------------------------------------------------------
+
+
+class TestDecodeBit:
+    def test_lsb(self) -> None:
+        assert decode_bit(0b0000_0001, 0) is True
+        assert decode_bit(0b0000_0000, 0) is False
+
+    def test_msb(self) -> None:
+        assert decode_bit(0x8000, 15) is True
+        assert decode_bit(0x7FFF, 15) is False
+
+    def test_mid_bit(self) -> None:
+        assert decode_bit(0b0000_0100, 2) is True
+        assert decode_bit(0b1111_1011, 2) is False
+
+
+class TestEncodeBit:
+    def test_set_lsb(self) -> None:
+        assert encode_bit(0x0000, 0, True) == 0x0001
+
+    def test_clear_lsb(self) -> None:
+        assert encode_bit(0xFFFF, 0, False) == 0xFFFE
+
+    def test_set_msb(self) -> None:
+        assert encode_bit(0x0000, 15, True) == 0x8000
+
+    def test_clear_msb(self) -> None:
+        assert encode_bit(0xFFFF, 15, False) == 0x7FFF
+
+    def test_set_is_idempotent(self) -> None:
+        assert encode_bit(0x0002, 1, True) == 0x0002
+
+    def test_clear_is_idempotent(self) -> None:
+        assert encode_bit(0xFFFD, 1, False) == 0xFFFD
+
+    def test_result_masked_to_16_bits(self) -> None:
+        assert encode_bit(0xFFFF, 15, True) == 0xFFFF
+
+    def test_clear_bit_masks_to_16_bits(self) -> None:
+        assert encode_bit(0x0000, 0, False) == 0x0000
