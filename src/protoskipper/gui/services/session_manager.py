@@ -264,6 +264,12 @@ class SessionManager(QObject):
         _w, _r = handle.worker, ref
         QTimer.singleShot(0, _w, lambda: _w.read(_r))
 
+    def read_many(self, session_id: SessionId, refs: list[ObjectRef]) -> None:
+        """Dispatch a batch read on the worker thread (non-blocking)."""
+        handle = self._require(session_id)
+        _w, _refs = handle.worker, list(refs)
+        QTimer.singleShot(0, _w, lambda: _w.read_many(_refs))
+
     def prepare_write(self, session_id: SessionId, ref: ObjectRef, value: Any) -> None:
         handle = self._require(session_id)
         _w, _r, _v = handle.worker, ref, value

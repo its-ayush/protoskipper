@@ -177,6 +177,21 @@ class DriverWorker(QObject):
             return
         self.read_completed.emit(result)
 
+    @Slot(list)
+    def read_many(self, refs: list[ObjectRef]) -> None:
+        """Batch read using the driver's contiguous-block optimisation."""
+        if self._session is None:
+            self.error_raised.emit("read_many", "session not open")
+            return
+        try:
+            results = self._session.driver_session.read_many(refs)
+        except Exception as exc:
+            _logger.exception("read_many failed")
+            self.error_raised.emit("read_many", str(exc))
+            return
+        for result in results:
+            self.read_completed.emit(result)
+
     @Slot(object, object)
     def prepare_write(self, ref: ObjectRef, value: Any) -> None:
         if self._session is None:
