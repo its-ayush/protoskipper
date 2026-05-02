@@ -319,6 +319,8 @@ class MainWindow(QMainWindow):
         self._device_tree.write_requested.connect(self._open_write_dialog)
         self._device_tree.add_to_watchlist_requested.connect(self._add_to_watchlist)
         self._device_tree.disconnect_requested.connect(self._disconnect_session)
+        self._device_tree.reconnect_requested.connect(self._reconnect_session)
+        self._device_tree.clone_unit_requested.connect(self._clone_unit_session)
         dock_left = QDockWidget("Devices", self)
         dock_left.setObjectName("DeviceTreeDock")
         dock_left.setWidget(self._device_tree)
@@ -467,6 +469,44 @@ class MainWindow(QMainWindow):
 
     def _disconnect_session(self, session_id: str) -> None:
         self._session_manager.close_session(SessionId(session_id))
+
+    def _reconnect_session(self, session_id: str) -> None:
+        """Re-open a closed session in place using its stored parameters."""
+        self._session_manager.reconnect_session(SessionId(session_id))
+        self.statusBar().showMessage("Reconnecting\u2026", 4000)
+
+    def _clone_unit_session(self, session_id: str, unit_id: int) -> None:
+        """Open a new session to the same gateway with a different unit ID."""
+        import re
+
+        info = self._state.session(SessionId(session_id))
+        if info is None or not info.is_open:
+            return
+        m = re.match(
+            r"^(?P<host>[^\s:/]+)(?::(?P<port>\d+))?(?:/unit=\d+)?$",
+            info.device.address,
+        )
+        if not m:
+            QMessageBox.warning(
+                self,
+                "Cannot clone session",
+                f"Cannot parse gateway address: {info.device.address}",
+            )
+            return
+        host = m.group("host")
+        port = m.group("port") or "502"
+        new_address = f"{host}:{port}/unit={unit_id}"
+        try:
+            driver = self._session_manager.driver_for(info.device.protocol)
+            device = driver.parse_address(new_address)
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not build address", str(exc))
+            return
+        self._session_manager.open_session(device, info.profile, info.operator)
+        self.statusBar().showMessage(
+            f"Opening unit {unit_id} on {host}:{port}\u2026",
+            4000,
+        )
 
     def _currently_selected_session(self) -> str | None:
         sid = self._object_browser.current_session_id()

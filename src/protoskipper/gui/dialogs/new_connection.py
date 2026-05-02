@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QRadioButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -66,19 +67,38 @@ class NewConnectionDialog(QDialog):
         self._protocol_combo.setAccessibleName(self.tr("Protocol"))
         self._populate_protocols()
 
-        self._address_edit = QLineEdit(self)
-        self._address_edit.setPlaceholderText(self.tr("e.g. 10.0.0.5:502/unit=1"))
-        self._address_edit.setAccessibleName(self.tr("Device address"))
+        # ---- TCP transport fields ----------------------------------------
+        self._host_edit = QLineEdit(self)
+        self._host_edit.setPlaceholderText(self.tr("IP address or hostname"))
+        self._host_edit.setAccessibleName(self.tr("Gateway host or IP address"))
 
-        # Serial-port dropdown (shown only for RTU-type protocols).
-        self._port_combo = QComboBox(self)
-        self._port_combo.setEditable(True)
-        self._port_combo.lineEdit().setPlaceholderText(  # type: ignore[union-attr]
-            "Select or type port path"
+        self._tcp_port_spin = QSpinBox(self)
+        self._tcp_port_spin.setRange(1, 65535)
+        self._tcp_port_spin.setValue(502)
+        self._tcp_port_spin.setAccessibleName(self.tr("TCP port number"))
+
+        # ---- RTU transport fields ----------------------------------------
+        self._serial_port_combo = QComboBox(self)
+        self._serial_port_combo.setEditable(True)
+        self._serial_port_combo.lineEdit().setPlaceholderText(  # type: ignore[union-attr]
+            self.tr("Select or type port path")
         )
-        self._port_combo.setVisible(False)
+        self._serial_port_combo.setAccessibleName(self.tr("Serial port device"))
         self._populate_serial_ports()
-        self._port_combo.currentTextChanged.connect(self._on_port_selected)
+        self._serial_port_combo.currentTextChanged.connect(self._update_buttons)
+
+        self._baud_combo = QComboBox(self)
+        for _baud in ("1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"):
+            self._baud_combo.addItem(_baud)
+        self._baud_combo.setCurrentText("9600")
+        self._baud_combo.setAccessibleName(self.tr("Baud rate"))
+
+        # ---- Common transport field: Modbus unit/slave ID ----------------
+        self._unit_id_spin = QSpinBox(self)
+        self._unit_id_spin.setRange(1, 247)
+        self._unit_id_spin.setValue(1)
+        self._unit_id_spin.setAccessibleName(self.tr("Modbus unit ID (slave address 1\u2013247)"))
+
         self._label_edit = QLineEdit(self)
         self._label_edit.setPlaceholderText(self.tr("Optional friendly name (e.g. 'Feeder-1 RTU')"))
         self._label_edit.setAccessibleName(self.tr("Session label (optional friendly name)"))
@@ -120,12 +140,12 @@ class NewConnectionDialog(QDialog):
 
         # Track validity so the Connect button enables only when all
         # required fields are filled in.
-        self._address_edit.textChanged.connect(self._update_buttons)
+        self._host_edit.textChanged.connect(self._update_buttons)
         self._operator_edit.textChanged.connect(self._update_buttons)
         self._protocol_combo.currentIndexChanged.connect(self._on_protocol_changed)
         self._update_buttons()
         self._on_protocol_changed(self._protocol_combo.currentIndex())
-        # P3.A.1: Populate address-field completions from QSettings recent list.
+        # Populate host-field completions from QSettings recent list.
         self._load_recent_completions()
 
     # ---- layout ----------------------------------------------------------
@@ -142,21 +162,33 @@ class NewConnectionDialog(QDialog):
 
     def _populate_serial_ports(self) -> None:
         """Fill the serial-port combo from pyserial (best-effort)."""
-        self._port_combo.clear()
-        self._port_combo.addItem("", "")  # blank top entry
+        self._serial_port_combo.clear()
+        self._serial_port_combo.addItem("", "")  # blank top entry
         for device, desc in list_serial_ports():
-            self._port_combo.addItem(f"{device}  —  {desc}", device)
+            self._serial_port_combo.addItem(f"{device}  \u2014  {desc}", device)
 
     def _build_layout(self) -> None:
         outer = QVBoxLayout(self)
 
-        protocol_form = QFormLayout()
-        protocol_form.addRow(self.tr("Protocol:"), self._protocol_combo)
-        protocol_form.addRow(self.tr("Address:"), self._address_edit)
-        self._port_combo_row_label = QLabel(self.tr("Serial port:"), self)
-        protocol_form.addRow(self._port_combo_row_label, self._port_combo)
-        protocol_form.addRow(self.tr("Label:"), self._label_edit)
-        outer.addLayout(protocol_form)
+        form = QFormLayout()
+        form.addRow(self.tr("Protocol:"), self._protocol_combo)
+
+        # TCP-specific rows — label widgets are stored so we can show/hide the pair.
+        self._host_row_label = QLabel(self.tr("Host:"), self)
+        form.addRow(self._host_row_label, self._host_edit)
+        self._tcp_port_row_label = QLabel(self.tr("Port:"), self)
+        form.addRow(self._tcp_port_row_label, self._tcp_port_spin)
+
+        # RTU-specific rows
+        self._serial_port_row_label = QLabel(self.tr("Serial port:"), self)
+        form.addRow(self._serial_port_row_label, self._serial_port_combo)
+        self._baud_row_label = QLabel(self.tr("Baud rate:"), self)
+        form.addRow(self._baud_row_label, self._baud_combo)
+
+        # Common rows
+        form.addRow(self.tr("Unit ID:"), self._unit_id_spin)
+        form.addRow(self.tr("Label:"), self._label_edit)
+        outer.addLayout(form)
 
         profile_box = QGroupBox(self.tr("Session profile"))
         profile_layout = QVBoxLayout(profile_box)
@@ -178,41 +210,60 @@ class NewConnectionDialog(QDialog):
     # ---- validation ------------------------------------------------------
 
     def _on_protocol_changed(self, _index: int) -> None:
-        """Show or hide the serial-port combo based on the selected protocol."""
+        """Switch transport-field visibility when the protocol changes.
+
+        TCP and RTU have completely separate widgets, so there is no risk
+        of a serial-port path bleeding into the host field or vice versa.
+        """
         proto_id: str | None = self._protocol_combo.currentData()
         is_rtu = proto_id is not None and "rtu" in proto_id.lower()
-        self._port_combo.setVisible(is_rtu)
-        self._port_combo_row_label.setVisible(is_rtu)
-        if is_rtu and not self._address_edit.text().strip():
-            # Pre-fill the address with the first discovered port (if any).
-            first_device = self._port_combo.itemData(1)
+
+        # TCP-specific widgets
+        for w in (
+            self._host_row_label,
+            self._host_edit,
+            self._tcp_port_row_label,
+            self._tcp_port_spin,
+        ):
+            w.setVisible(not is_rtu)
+
+        # RTU-specific widgets
+        for w in (
+            self._serial_port_row_label,
+            self._serial_port_combo,
+            self._baud_row_label,
+            self._baud_combo,
+        ):
+            w.setVisible(is_rtu)
+
+        # Pre-fill the serial port for RTU if none is selected yet.
+        if is_rtu and not self._serial_port_combo.currentText().strip():
+            first_device = self._serial_port_combo.itemData(1)
             if first_device:
-                self._address_edit.setText(str(first_device))
+                self._serial_port_combo.setCurrentText(str(first_device))
+
         self._update_buttons()
-        # Refresh address completions for the new protocol.
+        # Refresh host-field completions for the new protocol.
         self._load_recent_completions()
 
-    def _on_port_selected(self, text: str) -> None:
-        """When a port is chosen from the dropdown, mirror it to the address field."""
-        device = self._port_combo.currentData()
-        if device:
-            self._address_edit.setText(str(device))
-        elif text.strip():
-            # Editable combo — user typed a custom path.
-            self._address_edit.setText(text.strip())
-
     def _update_buttons(self) -> None:
-        ok = (
-            self._protocol_combo.currentData() is not None
-            and bool(self._address_edit.text().strip())
-            and bool(self._operator_edit.text().strip())
-        )
+        proto_id: str | None = self._protocol_combo.currentData()
+        is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        if is_rtu:
+            transport_ok = bool(self._serial_port_combo.currentText().strip())
+        else:
+            transport_ok = bool(self._host_edit.text().strip())
+        ok = proto_id is not None and transport_ok and bool(self._operator_edit.text().strip())
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(ok)
 
     def _on_accept(self) -> None:
-        if self._protocol_combo.currentData() is None:
+        proto_id: str | None = self._protocol_combo.currentData()
+        if proto_id is None:
             return
-        if not self._address_edit.text().strip():
+        is_rtu = "rtu" in proto_id.lower()
+        if is_rtu and not self._serial_port_combo.currentText().strip():
+            return
+        if not is_rtu and not self._host_edit.text().strip():
             return
         if not self._operator_edit.text().strip():
             return
@@ -222,38 +273,76 @@ class NewConnectionDialog(QDialog):
     # ---- P3.A.1 recent connections (QSettings-backed QCompleter) ---------
 
     def _load_recent_completions(self) -> None:
-        """Rebuild the QCompleter on the address field from QSettings."""
+        """Rebuild the QCompleter on the host field from QSettings (TCP only)."""
         proto_id: str | None = self._protocol_combo.currentData()
-        s = QSettings(_ORG, _APP)
-        try:
-            recent: list[dict] = json.loads(s.value(_RECENT_KEY, "[]", str))
-        except (json.JSONDecodeError, TypeError):
-            recent = []
-        addresses = [
-            entry["address"]
-            for entry in recent
-            if isinstance(entry, dict)
-            and entry.get("protocol") == proto_id
-            and isinstance(entry.get("address"), str)
-        ]
-        completer = QCompleter(addresses, self)
-        self._address_edit.setCompleter(completer)
-
-    def _save_recent_connection(self) -> None:
-        """Prepend the current connection to the QSettings recent list (max 10)."""
-        proto_id: str | None = self._protocol_combo.currentData()
-        address = self._address_edit.text().strip()
-        label = self._label_edit.text().strip()
-        if not proto_id or not address:
+        is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        if is_rtu:
+            self._host_edit.setCompleter(None)
             return
         s = QSettings(_ORG, _APP)
         try:
             recent: list[dict] = json.loads(s.value(_RECENT_KEY, "[]", str))
         except (json.JSONDecodeError, TypeError):
             recent = []
-        entry = {"protocol": proto_id, "address": address, "label": label}
+        hosts_raw = [
+            entry["host"]
+            for entry in recent
+            if isinstance(entry, dict)
+            and entry.get("protocol") == proto_id
+            and isinstance(entry.get("host"), str)
+        ]
+        seen: set[str] = set()
+        hosts: list[str] = []
+        for h in hosts_raw:
+            if h not in seen:
+                seen.add(h)
+                hosts.append(h)
+        self._host_edit.setCompleter(QCompleter(hosts, self))
+
+    def _save_recent_connection(self) -> None:
+        """Prepend the current connection to the QSettings recent list (max 10)."""
+        proto_id: str | None = self._protocol_combo.currentData()
+        if not proto_id:
+            return
+        is_rtu = "rtu" in proto_id.lower()
+        label = self._label_edit.text().strip()
+        if is_rtu:
+            serial_port = self._serial_port_combo.currentText().strip()
+            if not serial_port:
+                return
+            entry: dict = {
+                "protocol": proto_id,
+                "serial_port": serial_port,
+                "baud": self._baud_combo.currentText(),
+                "unit": self._unit_id_spin.value(),
+                "label": label,
+            }
+        else:
+            host = self._host_edit.text().strip()
+            if not host:
+                return
+            entry = {
+                "protocol": proto_id,
+                "host": host,
+                "tcp_port": self._tcp_port_spin.value(),
+                "unit": self._unit_id_spin.value(),
+                "label": label,
+            }
+        s = QSettings(_ORG, _APP)
+        try:
+            recent: list[dict] = json.loads(s.value(_RECENT_KEY, "[]", str))
+        except (json.JSONDecodeError, TypeError):
+            recent = []
         # Remove any existing identical entry so we don't accumulate duplicates.
-        recent = [r for r in recent if r.get("address") != address or r.get("protocol") != proto_id]
+        if is_rtu:
+            key_field = "serial_port"
+            key_val = entry["serial_port"]
+        else:
+            key_field = "host"
+            key_val = entry["host"]
+        recent = [
+            r for r in recent if not (r.get("protocol") == proto_id and r.get(key_field) == key_val)
+        ]
         recent.insert(0, entry)
         s.setValue(_RECENT_KEY, json.dumps(recent[:_MAX_RECENT]))
 
@@ -267,7 +356,31 @@ class NewConnectionDialog(QDialog):
                 return
 
     def set_address(self, address: str) -> None:
-        self._address_edit.setText(address)
+        """Populate the transport fields by parsing an address string.
+
+        For TCP: ``host:port/unit=N`` → fills Host, Port, and Unit ID.
+        For RTU: the raw address string is placed in the serial-port field.
+        """
+        import re
+
+        proto_id: str | None = self._protocol_combo.currentData()
+        is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        address = address.strip()
+        if is_rtu:
+            self._serial_port_combo.setCurrentText(address)
+        else:
+            m = re.match(
+                r"^(?P<host>[^\s:/]+)(?::(?P<port>\d+))?(?:/unit=(?P<unit>\d+))?$",
+                address,
+            )
+            if m:
+                self._host_edit.setText(m.group("host"))
+                if m.group("port"):
+                    self._tcp_port_spin.setValue(int(m.group("port")))
+                if m.group("unit"):
+                    self._unit_id_spin.setValue(int(m.group("unit")))
+            else:
+                self._host_edit.setText(address)
 
     def set_label(self, label: str) -> None:
         self._label_edit.setText(label)
@@ -276,11 +389,22 @@ class NewConnectionDialog(QDialog):
 
     def request(self) -> ConnectionRequest:
         """Read the user's choices. Only call after :meth:`exec` returned Accepted."""
+        proto_id: str = self._protocol_combo.currentData()
+        is_rtu = "rtu" in proto_id.lower()
+        unit = self._unit_id_spin.value()
+        if is_rtu:
+            port = self._serial_port_combo.currentText().strip()
+            baud = self._baud_combo.currentText()
+            address = f"{port}@{baud},N,1/unit={unit}"
+        else:
+            host = self._host_edit.text().strip()
+            tcp_port = self._tcp_port_spin.value()
+            address = f"{host}:{tcp_port}/unit={unit}"
         profile_value = self._profile_group.checkedButton().property("profile")
         profile = SessionProfile(profile_value)
         return ConnectionRequest(
-            protocol_id=self._protocol_combo.currentData(),
-            address=self._address_edit.text().strip(),
+            protocol_id=proto_id,
+            address=address,
             label=self._label_edit.text().strip(),
             profile=profile,
             operator=self._operator_edit.text().strip(),

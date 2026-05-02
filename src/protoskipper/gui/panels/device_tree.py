@@ -16,6 +16,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
     QHeaderView,
+    QInputDialog,
     QMenu,
     QMessageBox,
     QTreeView,
@@ -46,6 +47,8 @@ class DeviceTreePanel(QWidget):
     write_requested = Signal(str, object)  # SessionId, ObjectRef
     add_to_watchlist_requested = Signal(str, object)  # SessionId, ObjectRef
     disconnect_requested = Signal(str)  # SessionId
+    reconnect_requested = Signal(str)  # SessionId
+    clone_unit_requested = Signal(str, int)  # SessionId, new_unit_id
 
     def __init__(
         self,
@@ -122,7 +125,23 @@ class DeviceTreePanel(QWidget):
             )
             disconnect_action.setEnabled(payload.is_open and not self._replay_mode)
             menu.addAction(disconnect_action)
+            reconnect_action = QAction("Reconnect", self)
+            reconnect_action.triggered.connect(
+                lambda _checked=False, sid=payload.session_id: self.reconnect_requested.emit(sid)
+            )
+            reconnect_action.setEnabled(not payload.is_open)
+            menu.addAction(reconnect_action)
 
+            clone_action = QAction("Add unit to same gateway\u2026", self)
+            clone_action.setEnabled(payload.is_open and not self._replay_mode)
+            clone_action.triggered.connect(
+                lambda _checked=False, sid=payload.session_id: self._prompt_clone_unit(
+                    SessionId(sid)
+                )
+            )
+            menu.addAction(clone_action)
+
+            menu.addSeparator()
             import_action = QAction("Import register map…", self)
             import_action.setEnabled(payload.is_open and not self._replay_mode)
             import_action.triggered.connect(
@@ -173,6 +192,21 @@ class DeviceTreePanel(QWidget):
 
         if menu.actions():
             menu.exec(self._view.viewport().mapToGlobal(point))
+
+    # ---- clone unit ------------------------------------------------------
+
+    def _prompt_clone_unit(self, session_id: SessionId) -> None:
+        """Ask for a new unit ID and emit clone_unit_requested to open a sibling session."""
+        unit_id, ok = QInputDialog.getInt(
+            self,
+            "Add unit to same gateway",
+            "Unit ID (1\u2013247):",
+            value=1,
+            min=1,
+            max=247,
+        )
+        if ok:
+            self.clone_unit_requested.emit(session_id, unit_id)
 
     # ---- register-map import ---------------------------------------------
 

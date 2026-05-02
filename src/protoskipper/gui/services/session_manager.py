@@ -158,12 +158,18 @@ class SessionManager(QObject):
         device: DeviceRef,
         profile: SessionProfile,
         operator: str,
+        *,
+        _reuse_session_id: SessionId | None = None,
     ) -> SessionId:
         """Open a new session. Returns the SessionId immediately; the
         actual open is asynchronous and reported via ApplicationState
-        signals (``session_opened`` or ``session_failed``)."""
+        signals (``session_opened`` or ``session_failed``).
+
+        If *_reuse_session_id* is supplied the existing session-tree entry is
+        updated in place (used by :meth:`reconnect_session`).
+        """
         driver = self.driver_for(device.protocol)
-        session_id = new_session_id()
+        session_id = _reuse_session_id if _reuse_session_id is not None else new_session_id()
 
         worker = DriverWorker(
             driver=driver,
@@ -240,6 +246,26 @@ class SessionManager(QObject):
         QTimer.singleShot(0, _w, lambda: _w.open(_d, _p, _op, _ad))
 
         return session_id
+
+    def reconnect_session(self, session_id: SessionId) -> None:
+        """Re-open a closed session using its stored device/profile/operator.
+
+        The same :class:`SessionId` is reused so the device-tree entry updates
+        in place rather than adding a duplicate node.  If the session is already
+        open, not found, or a reconnect attempt is already in flight, this is a
+        no-op.
+        """
+        if session_id in self._workers:
+            return  # already being opened
+        info = self._state.session(session_id)
+        if info is None or info.is_open:
+            return
+        self.open_session(
+            info.device,
+            info.profile,
+            info.operator,
+            _reuse_session_id=session_id,
+        )
 
     def close_session(self, session_id: SessionId) -> None:
         handle = self._workers.get(session_id)
