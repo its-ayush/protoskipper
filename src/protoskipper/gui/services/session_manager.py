@@ -340,6 +340,49 @@ class SessionManager(QObject):
         objects = load_csv(csv_path, device=info.device)
         self._state.record_objects_enumerated(session_id, objects)
 
+    def add_object(self, session_id: SessionId, ref: ObjectRef) -> None:
+        """Append *ref* to the session's object list.
+
+        Silently ignored if the session does not exist.  No uniqueness check
+        is performed: the same register may appear more than once (useful for
+        reading the same address with different decode options side-by-side).
+        """
+        info = self._state.session(session_id)
+        if info is None:
+            return
+        new_objects = [*info.objects, ref]
+        self._state.record_objects_enumerated(session_id, new_objects)
+
+    def remove_object(self, session_id: SessionId, ref: ObjectRef) -> None:
+        """Remove the first occurrence of *ref* from the session's object list.
+
+        Matches by identity (``is``) first, then by ``object_id``.
+        Silently ignored if not found.
+        """
+        info = self._state.session(session_id)
+        if info is None:
+            return
+        objects = list(info.objects)
+        # Try identity first (exact same ObjectRef instance).
+        for i, obj in enumerate(objects):
+            if obj is ref:
+                del objects[i]
+                self._state.record_objects_enumerated(session_id, objects)
+                return
+        # Fall back to object_id equality.
+        for i, obj in enumerate(objects):
+            if obj.object_id == ref.object_id:
+                del objects[i]
+                self._state.record_objects_enumerated(session_id, objects)
+                return
+
+    def clear_objects(self, session_id: SessionId) -> None:
+        """Remove all objects from the session's object list."""
+        info = self._state.session(session_id)
+        if info is None:
+            return
+        self._state.record_objects_enumerated(session_id, [])
+
     def save_capture(self, session_id: SessionId, path: Path) -> None:
         """Flush the session's ring-buffer capture to a pcapng file at *path*.
 

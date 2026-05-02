@@ -842,32 +842,15 @@ class _ModbusSession(DriverSession):
 
     # -- enumerate --------------------------------------------------------
     def enumerate_objects(self) -> Iterator[ObjectRef]:
-        """Yield a synthetic, configurable register map.
+        """Modbus has no self-description protocol; yield nothing by default.
 
-        Modbus has no self-description, so without a register map file we
-        cannot enumerate truthfully. This default yields a small sample so
-        the GUI's tree is not empty; production usage replaces it with a
-        register-map import (CSV / Manufacturer XML) wired in later.
+        The object browser starts empty after connecting. The operator
+        adds registers explicitly using the GUI's ``Add Register…`` button,
+        or imports a register map via the device-tree context menu
+        (``Import register map…``).
         """
-        sample: list[tuple[str, str, Access, str | None]] = [
-            ("holding:0", "uint16", Access.READ_WRITE, None),
-            ("holding:1", "uint16", Access.READ_WRITE, None),
-            ("holding:5", "uint16", Access.READ_WRITE, None),
-            ("input:0", "uint16", Access.READ_ONLY, None),
-            ("input:1", "uint16", Access.READ_ONLY, None),
-            ("coils:0", "boolean", Access.READ_WRITE, None),
-            ("coils:1", "boolean", Access.READ_WRITE, None),
-            ("discrete:0", "boolean", Access.READ_ONLY, None),
-        ]
-        for object_id, dtype, access, unit in sample:
-            yield ObjectRef(
-                device=self.device,
-                object_id=object_id,
-                data_type=dtype,
-                access=access,
-                unit=unit,
-                label=object_id,
-            )
+        return
+        yield  # make this a generator function so the return type is satisfied
 
     # -- read -------------------------------------------------------------
     def read_many(self, refs: list[ObjectRef]) -> list[ReadResult]:

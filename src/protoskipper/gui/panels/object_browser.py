@@ -8,10 +8,14 @@ shortcut on the selected row.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QHeaderView,
+    QLabel,
+    QMenu,
     QPushButton,
+    QStackedWidget,
     QTableView,
     QToolBar,
     QVBoxLayout,
@@ -19,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from protoskipper.core.driver import ObjectRef
+from protoskipper.gui.dialogs.add_register import AddRegisterDialog
 from protoskipper.gui.models.object_browser_model import ObjectBrowserModel
 from protoskipper.gui.services.app_state import ApplicationState
 from protoskipper.gui.services.session_manager import SessionManager
@@ -50,8 +55,33 @@ class ObjectBrowserPanel(QWidget):
         self._view.horizontalHeader().setStretchLastSection(True)
         self._view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self._view.setAlternatingRowColors(True)
+        self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._view.customContextMenuRequested.connect(self._on_context_menu)
+
+        # ---- Empty-state placeholder (shown when session is open but has no objects) ----
+        self._empty_label = QLabel(
+            "<center>"
+            "<b>No registers defined.</b><br><br>"
+            "Use <b>Add Register…</b> to add a register manually,<br>"
+            "or right-click the session in the Device Tree → "
+            "<b>Import register map…</b> to load a CSV."
+            "</center>",
+            self,
+        )
+        self._empty_label.setWordWrap(True)
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet("color: grey; padding: 24px;")
+
+        self._stack = QStackedWidget(self)
+        self._stack.addWidget(self._view)  # index 0: table
+        self._stack.addWidget(self._empty_label)  # index 1: empty state
 
         self._toolbar = QToolBar(self)
+        self._add_register_button = QPushButton("Add Register…", self)
+        self._add_register_button.setAccessibleName("Add a register to this session")
+        self._add_register_button.setToolTip(
+            "Define a Modbus register address, type, and encoding to add to this session"
+        )
         self._read_button = QPushButton("Read selected", self)
         self._read_button.setAccessibleName("Read selected object")
         self._read_button.setToolTip("Read the selected register  [F5]")
@@ -62,27 +92,40 @@ class ObjectBrowserPanel(QWidget):
         self._write_button.setAccessibleName("Write to selected object")
         self._watch_button = QPushButton("Add to Watchlist", self)
         self._watch_button.setAccessibleName("Add selected object to watchlist")
+        self._remove_button = QPushButton("Remove", self)
+        self._remove_button.setAccessibleName("Remove selected register from this session")
+        self._remove_button.setToolTip("Remove the selected register from this session")
         for btn in (
+            self._add_register_button,
             self._read_button,
             self._read_all_button,
             self._write_button,
             self._watch_button,
+            self._remove_button,
         ):
             self._toolbar.addWidget(btn)
 
+        self._add_register_button.clicked.connect(self._on_add_register_clicked)
         self._read_button.clicked.connect(self._on_read_clicked)
         self._read_all_button.clicked.connect(self._on_read_all_clicked)
         self._write_button.clicked.connect(self._on_write_clicked)
         self._watch_button.clicked.connect(self._on_watch_clicked)
+        self._remove_button.clicked.connect(self._on_remove_clicked)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.addWidget(self._toolbar)
-        layout.addWidget(self._view)
+        layout.addWidget(self._stack)
+
+        # Subscribe to object-list changes to switch stack page.
+        self._state.objects_enumerated.connect(self._on_objects_enumerated)
+        self._state.session_opened.connect(self._update_stack)
+        self._state.session_closed.connect(self._update_stack)
 
         # P2.A.3: initialise before _update_actions() which reads it.
         self._replay_mode: bool = False
         self._update_actions()
+        self._update_stack()
         self._view.selectionModel().selectionChanged.connect(self._update_actions)
         # P2.A.3: wire signal after init so it can't fire before _replay_mode exists.
         self._state.replay_mode_changed.connect(self._on_replay_mode_changed)
@@ -92,6 +135,7 @@ class ObjectBrowserPanel(QWidget):
         self._session_id = sid
         self._model.set_session(sid)
         self._update_actions()
+        self._update_stack()
 
     def current_session_id(self) -> SessionId | None:
         """Return the currently displayed session's id, or None."""
@@ -130,21 +174,71 @@ class ObjectBrowserPanel(QWidget):
         obj = self._selected_object()
         is_writable = obj is not None and obj.access.value != "ro"
 
+        self._add_register_button.setEnabled(is_open and not self._replay_mode)
         self._read_all_button.setEnabled(is_open and not self._replay_mode)
         self._read_button.setEnabled(is_open and has_selection and not self._replay_mode)
         self._write_button.setEnabled(
             is_open and has_selection and is_writable and not self._replay_mode
         )
         self._watch_button.setEnabled(has_selection and not self._replay_mode)
+        self._remove_button.setEnabled(is_open and has_selection and not self._replay_mode)
         _tooltip = "Replay mode — writes are disabled" if self._replay_mode else ""
         self._write_button.setToolTip(_tooltip)
         self._watch_button.setToolTip(_tooltip)
+
+    def _update_stack(self, *_args) -> None:
+        """Switch between the table and the empty-state placeholder."""
+        has_session = self._session_id is not None
+        info = self._state.session(self._session_id) if has_session else None
+        is_open = info.is_open if info else False
+        has_objects = info is not None and len(info.objects) > 0
+        # Show empty state only when session is open but has no objects.
+        if is_open and not has_objects:
+            self._stack.setCurrentIndex(1)
+        else:
+            self._stack.setCurrentIndex(0)
+
+    def _on_objects_enumerated(self, session_id: str, _objects: list) -> None:
+        if SessionId(session_id) == self._session_id:
+            self._update_stack()
 
     # ---- handlers --------------------------------------------------------
 
     def _on_replay_mode_changed(self, active: bool) -> None:
         self._replay_mode = active
         self._update_actions()
+
+    def _on_add_register_clicked(self) -> None:
+        if self._session_id is None:
+            return
+        info = self._state.session(self._session_id)
+        if info is None or not info.is_open:
+            return
+        dialog = AddRegisterDialog(device=info.device, parent=self)
+        if dialog.exec() != AddRegisterDialog.Accepted:
+            return
+        ref = dialog.object_ref()
+        self._session_manager.add_object(self._session_id, ref)
+
+    def _on_remove_clicked(self) -> None:
+        obj = self._selected_object()
+        if obj is None or self._session_id is None:
+            return
+        self._session_manager.remove_object(self._session_id, obj)
+
+    def _on_context_menu(self, point) -> None:
+        obj = self._selected_object()
+        if obj is None or self._session_id is None:
+            return
+        info = self._state.session(self._session_id)
+        is_open = info.is_open if info else False
+        menu = QMenu(self._view)
+        if is_open and not self._replay_mode:
+            remove_action = QAction("Remove register", self)
+            remove_action.triggered.connect(self._on_remove_clicked)
+            menu.addAction(remove_action)
+        if menu.actions():
+            menu.exec(self._view.viewport().mapToGlobal(point))
 
     def _on_read_clicked(self) -> None:
         obj = self._selected_object()
