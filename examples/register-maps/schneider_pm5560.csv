@@ -1,0 +1,32 @@
+# protoskipper-modbus-map v1
+# Schneider Electric PowerLogic PM5560 — Modbus TCP register map (partial)
+# Source: Schneider Electric document 7EN02-0391-05 "EasyLogic PM5500 / PM5560
+#         Modbus Communication Guide" (publicly available from se.com).
+# Note: Schneider uses 1-based Modicon notation; this file uses 0-based
+#       wire addresses per the ProtoSkipper format spec.
+#       Modicon 30001 = wire input:0, Modicon 40001 = wire holding:0.
+object_id,data_type,access,label,unit,scale,offset,description,byte_order,word_order
+holding:2999,float32,ro,Voltage L1-N,V,1.0,0.0,Phase 1 to neutral RMS voltage,big,big
+holding:3001,float32,ro,Voltage L2-N,V,1.0,0.0,Phase 2 to neutral RMS voltage,big,big
+holding:3003,float32,ro,Voltage L3-N,V,1.0,0.0,Phase 3 to neutral RMS voltage,big,big
+holding:3009,float32,ro,Voltage L1-L2,V,1.0,0.0,Phase 1 to phase 2 RMS voltage,big,big
+holding:3011,float32,ro,Voltage L2-L3,V,1.0,0.0,Phase 2 to phase 3 RMS voltage,big,big
+holding:3013,float32,ro,Voltage L3-L1,V,1.0,0.0,Phase 3 to phase 1 RMS voltage,big,big
+holding:3019,float32,ro,Current L1,A,1.0,0.0,Phase 1 RMS current,big,big
+holding:3021,float32,ro,Current L2,A,1.0,0.0,Phase 2 RMS current,big,big
+holding:3023,float32,ro,Current L3,A,1.0,0.0,Phase 3 RMS current,big,big
+holding:3053,float32,ro,Active Power Total,W,1.0,0.0,Total three-phase active power,big,big
+holding:3059,float32,ro,Reactive Power Total,VAr,1.0,0.0,Total three-phase reactive power,big,big
+holding:3065,float32,ro,Apparent Power Total,VA,1.0,0.0,Total three-phase apparent power,big,big
+holding:3083,float32,ro,Power Factor Total,,1.0,0.0,Total three-phase power factor,big,big
+holding:3109,float32,ro,Frequency,Hz,1.0,0.0,Supply frequency,big,big
+holding:3203,float32,ro,Active Energy Import,Wh,1.0,0.0,Active energy import accumulator,big,big
+holding:3207,float32,ro,Active Energy Export,Wh,1.0,0.0,Active energy export accumulator,big,big
+holding:3215,float32,ro,Reactive Energy Import,VArh,1.0,0.0,Reactive energy import,big,big
+holding:3219,float32,ro,Reactive Energy Export,VArh,1.0,0.0,Reactive energy export,big,big
+holding:3517,uint32,ro,THD Voltage L1,%,0.01,0.0,Total harmonic distortion V L1 (0.01% per count),big,big
+holding:3519,uint32,ro,THD Voltage L2,%,0.01,0.0,Total harmonic distortion V L2,big,big
+holding:3521,uint32,ro,THD Voltage L3,%,0.01,0.0,Total harmonic distortion V L3,big,big
+holding:3523,uint32,ro,THD Current L1,%,0.01,0.0,Total harmonic distortion I L1,big,big
+holding:3525,uint32,ro,THD Current L2,%,0.01,0.0,Total harmonic distortion I L2,big,big
+holding:3527,uint32,ro,THD Current L3,%,0.01,0.0,Total harmonic distortion I L3,big,big

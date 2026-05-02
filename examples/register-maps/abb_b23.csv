@@ -1,0 +1,33 @@
+# protoskipper-modbus-map v1
+# ABB B23 112-100 Energy Meter — Modbus RTU register map (partial)
+# Source: ABB document "B23 / B24 Energy Meters — Modbus Communication Protocol"
+#         (publicly available from new.abb.com/power-measurement).
+# Note: ABB B23 uses 0-based register addresses and big-endian byte/word order
+#       for float32 quantities.  Integer quantities are single 16-bit registers.
+object_id,data_type,access,label,unit,scale,offset,description,byte_order,word_order
+holding:22,float32,ro,Voltage L1,V,1.0,0.0,Phase 1 to neutral voltage,big,big
+holding:24,float32,ro,Voltage L2,V,1.0,0.0,Phase 2 to neutral voltage,big,big
+holding:26,float32,ro,Voltage L3,V,1.0,0.0,Phase 3 to neutral voltage,big,big
+holding:28,float32,ro,Current L1,A,1.0,0.0,Phase 1 current,big,big
+holding:30,float32,ro,Current L2,A,1.0,0.0,Phase 2 current,big,big
+holding:32,float32,ro,Current L3,A,1.0,0.0,Phase 3 current,big,big
+holding:40,float32,ro,Active Power L1,W,1.0,0.0,Phase 1 active power,big,big
+holding:42,float32,ro,Active Power L2,W,1.0,0.0,Phase 2 active power,big,big
+holding:44,float32,ro,Active Power L3,W,1.0,0.0,Phase 3 active power,big,big
+holding:46,float32,ro,Active Power Total,W,1.0,0.0,Total active power,big,big
+holding:48,float32,ro,Reactive Power Total,VAr,1.0,0.0,Total reactive power,big,big
+holding:50,float32,ro,Apparent Power Total,VA,1.0,0.0,Total apparent power,big,big
+holding:52,float32,ro,Power Factor,,,1.0,0.0,Total power factor,big,big
+holding:54,float32,ro,Frequency,Hz,1.0,0.0,Network frequency,big,big
+holding:72,float32,ro,Active Energy Import,kWh,1.0,0.0,Import active energy (kWh),big,big
+holding:74,float32,ro,Active Energy Export,kWh,1.0,0.0,Export active energy (kWh),big,big
+holding:76,float32,ro,Reactive Energy Import,kVArh,1.0,0.0,Import reactive energy,big,big
+holding:78,float32,ro,Reactive Energy Export,kVArh,1.0,0.0,Export reactive energy,big,big
+holding:80,float32,ro,Apparent Energy,kVAh,1.0,0.0,Total apparent energy,big,big
+holding:86,float32,ro,Max Demand Active Power,W,1.0,0.0,Maximum demand active power,big,big
+holding:100,float32,ro,THD Voltage L1,%,1.0,0.0,THD of phase 1 voltage,big,big
+holding:102,float32,ro,THD Voltage L2,%,1.0,0.0,THD of phase 2 voltage,big,big
+holding:104,float32,ro,THD Voltage L3,%,1.0,0.0,THD of phase 3 voltage,big,big
+holding:106,float32,ro,THD Current L1,%,1.0,0.0,THD of phase 1 current,big,big
+holding:108,float32,ro,THD Current L2,%,1.0,0.0,THD of phase 2 current,big,big
+holding:110,float32,ro,THD Current L3,%,1.0,0.0,THD of phase 3 current,big,big

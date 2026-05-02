@@ -1,0 +1,33 @@
+# protoskipper-modbus-map v1
+# Siemens SENTRON PAC2200 — Modbus RTU/TCP register map (partial)
+# Source: Siemens manual "SENTRON PAC2200 Modbus Interface" A5E02330428-05
+#         (publicly available from siemens.com/support).
+# Note: Register addresses are 0-based wire addresses.
+#       PAC2200 uses big-endian byte order, big-endian word order for all
+#       multi-register values.
+object_id,data_type,access,label,unit,scale,offset,description,byte_order,word_order
+holding:1,float32,ro,Voltage L1-N,V,1.0,0.0,Phase 1 to neutral voltage,big,big
+holding:3,float32,ro,Voltage L2-N,V,1.0,0.0,Phase 2 to neutral voltage,big,big
+holding:5,float32,ro,Voltage L3-N,V,1.0,0.0,Phase 3 to neutral voltage,big,big
+holding:7,float32,ro,Voltage L1-L2,V,1.0,0.0,Line-to-line voltage L1-L2,big,big
+holding:9,float32,ro,Voltage L2-L3,V,1.0,0.0,Line-to-line voltage L2-L3,big,big
+holding:11,float32,ro,Voltage L3-L1,V,1.0,0.0,Line-to-line voltage L3-L1,big,big
+holding:13,float32,ro,Current L1,A,1.0,0.0,Phase 1 current,big,big
+holding:15,float32,ro,Current L2,A,1.0,0.0,Phase 2 current,big,big
+holding:17,float32,ro,Current L3,A,1.0,0.0,Phase 3 current,big,big
+holding:25,float32,ro,Active Power L1,W,1.0,0.0,Phase 1 active power,big,big
+holding:27,float32,ro,Active Power L2,W,1.0,0.0,Phase 2 active power,big,big
+holding:29,float32,ro,Active Power L3,W,1.0,0.0,Phase 3 active power,big,big
+holding:31,float32,ro,Active Power Total,W,1.0,0.0,Total active power,big,big
+holding:33,float32,ro,Reactive Power Total,VAr,1.0,0.0,Total reactive power,big,big
+holding:35,float32,ro,Apparent Power Total,VA,1.0,0.0,Total apparent power,big,big
+holding:37,float32,ro,Power Factor Total,,1.0,0.0,Total power factor (signed),big,big
+holding:71,float32,ro,Frequency,Hz,1.0,0.0,Network frequency,big,big
+holding:73,float32,ro,Active Energy Import,kWh,1.0,0.0,Imported active energy (kWh),big,big
+holding:75,float32,ro,Active Energy Export,kWh,1.0,0.0,Exported active energy (kWh),big,big
+holding:77,float32,ro,Reactive Energy Import,kVArh,1.0,0.0,Imported reactive energy,big,big
+holding:79,float32,ro,Reactive Energy Export,kVArh,1.0,0.0,Exported reactive energy,big,big
+holding:101,float32,ro,Current N,A,1.0,0.0,Neutral current (calculated),big,big
+holding:105,float32,ro,Voltage Average L-N,V,1.0,0.0,Average L-N voltage,big,big
+holding:107,float32,ro,Voltage Average L-L,V,1.0,0.0,Average L-L voltage,big,big
+holding:109,float32,ro,Current Average,A,1.0,0.0,Average line current,big,big
