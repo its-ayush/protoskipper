@@ -14,12 +14,14 @@ import struct
 import pytest
 
 from protoskipper.builtin_drivers.modbus.codec import (
+    apply_scale,
     decode_bit,
     decode_registers,
     decode_string,
     encode_bit,
     encode_string,
     encode_value,
+    invert_scale,
     required_register_count,
 )
 
@@ -381,3 +383,49 @@ class TestEncodeString:
     def test_unknown_type_raises(self) -> None:
         with pytest.raises(ValueError, match="unsupported"):
             encode_string("X", 1, "uint16", "big")
+
+
+# ---------------------------------------------------------------------------
+# Scale + offset helpers (P1.B.4)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyScale:
+    def test_identity(self) -> None:
+        assert apply_scale(100, 1.0, 0.0) == pytest.approx(100.0)
+
+    def test_scale_only(self) -> None:
+        assert apply_scale(1000, 0.1, 0.0) == pytest.approx(100.0)
+
+    def test_offset_only(self) -> None:
+        assert apply_scale(25, 1.0, -273.15) == pytest.approx(-248.15)
+
+    def test_scale_and_offset(self) -> None:
+        assert apply_scale(100, 0.1, -10.0) == pytest.approx(0.0)
+
+    def test_negative_raw(self) -> None:
+        assert apply_scale(-100, 0.1, 0.0) == pytest.approx(-10.0)
+
+
+class TestInvertScale:
+    def test_identity(self) -> None:
+        assert invert_scale(100.0, 1.0, 0.0) == pytest.approx(100.0)
+
+    def test_scale_only(self) -> None:
+        assert invert_scale(100.0, 0.1, 0.0) == pytest.approx(1000.0)
+
+    def test_offset_only(self) -> None:
+        assert invert_scale(-248.15, 1.0, -273.15) == pytest.approx(25.0, rel=1e-5)
+
+    def test_scale_and_offset(self) -> None:
+        assert invert_scale(0.0, 0.1, -10.0) == pytest.approx(100.0)
+
+    def test_zero_scale_raises(self) -> None:
+        with pytest.raises(ZeroDivisionError):
+            invert_scale(5.0, 0.0, 0.0)
+
+    def test_round_trip(self) -> None:
+        raw = 1234
+        scale, offset = 0.01, -50.0
+        eng = apply_scale(raw, scale, offset)
+        assert invert_scale(eng, scale, offset) == pytest.approx(raw, rel=1e-9)

@@ -314,3 +314,29 @@ def encode_string(
     raw = raw[:max_bytes].ljust(max_bytes, b"\x00")
     bo_char = "<" if byte_order == "little" else ">"
     return [struct.unpack(f"{bo_char}H", raw[i : i + 2])[0] for i in range(0, max_bytes, 2)]
+
+
+# ---------------------------------------------------------------------------
+# Scale + offset helpers (P1.B.4)
+# ---------------------------------------------------------------------------
+
+
+def apply_scale(raw: int | float, scale: float, offset: float) -> float:
+    """Convert a raw register value to an engineering value.
+
+    ``eng = raw * scale + offset``
+
+    This is the forward transform applied on **read**.
+    """
+    return float(raw) * scale + offset
+
+
+def invert_scale(eng: float, scale: float, offset: float) -> float:
+    """Convert an engineering value back to a raw register value.
+
+    ``raw = (eng - offset) / scale``
+
+    This is the inverse transform applied on **write** (before encoding).
+    Raises :class:`ZeroDivisionError` when *scale* is zero.
+    """
+    return (float(eng) - offset) / scale

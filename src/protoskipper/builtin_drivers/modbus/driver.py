@@ -44,12 +44,14 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from protoskipper.builtin_drivers.modbus.codec import (
     REGISTER_COUNTS,
+    apply_scale,
     decode_bit,
     decode_registers,
     decode_string,
     encode_bit,
     encode_string,
     encode_value,
+    invert_scale,
 )
 from protoskipper.core.driver import (
     Access,
@@ -882,6 +884,7 @@ class _ModbusSession(DriverSession):
             else:
                 value = raw_regs[0] if len(raw_regs) == 1 else raw_regs
 
+        value = self._apply_read_scale(ref, value)
         return ReadResult(
             object_ref=ref,
             value=value,
@@ -889,6 +892,24 @@ class _ModbusSession(DriverSession):
             timestamp=ts,
             raw_bytes=None,
         )
+
+    def _apply_read_scale(self, ref: ObjectRef, value: Any) -> Any:
+        """Apply scale + offset from ref.metadata to a decoded register value.
+
+        Only applied to numeric (non-string, non-boolean) types.  Returns
+        the unmodified value for types where scale makes no sense.
+        """
+        if ref.data_type in ("boolean", "ascii", "utf16"):
+            return value
+        scale = ref.metadata.get("scale", 1.0)
+        offset = ref.metadata.get("offset", 0.0)
+        if scale == 1.0 and offset == 0.0:
+            return value
+        try:
+            return apply_scale(value, float(scale), float(offset))
+        except Exception as exc:
+            _logger.warning("Scale/offset application failed for %s: %s", ref.object_id, exc)
+            return value
 
     # -- write ------------------------------------------------------------
     def prepare_write(self, ref: ObjectRef, value: Any) -> WriteIntent:
@@ -905,6 +926,14 @@ class _ModbusSession(DriverSession):
         byte_order = str(ref.metadata.get("byte_order", "big"))
         word_order = str(ref.metadata.get("word_order", "big"))
         bit_index = ref.metadata.get("bit")
+
+        # Invert scale+offset before encoding (numeric, non-string types).
+        raw_value = value
+        if dtype not in ("boolean", "ascii", "utf16") and bit_index is None:
+            scale = ref.metadata.get("scale", 1.0)
+            offset = ref.metadata.get("offset", 0.0)
+            if scale != 1.0 or offset != 0.0:
+                raw_value = invert_scale(float(value), float(scale), float(offset))
 
         try:
             if table == "holding":
@@ -930,7 +959,7 @@ class _ModbusSession(DriverSession):
                     extra_meta = {"registers": registers}
                 elif codec_count > 1:
                     # Multi-register type: encode through the codec.
-                    registers = encode_value(float(value), dtype, byte_order, word_order)
+                    registers = encode_value(float(raw_value), dtype, byte_order, word_order)
                     encoded = b"".join(r.to_bytes(2, "big") for r in registers)
                     description = (
                         f"Write holding[{address}:{address + codec_count - 1}]"
@@ -939,7 +968,7 @@ class _ModbusSession(DriverSession):
                     extra_meta: dict = {"registers": registers}
                 else:
                     # Single-register (uint16 / int16 / boolean stored in holding).
-                    int_value = int(value) & 0xFFFF
+                    int_value = int(raw_value) & 0xFFFF
                     encoded = int_value.to_bytes(2, "big")
                     description = f"Write holding[{address}] := {int_value} (0x{int_value:04x})"
                     extra_meta = {}
