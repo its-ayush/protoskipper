@@ -206,3 +206,85 @@ def test_denied_write_has_no_write_committed_row(tmp_path: Path) -> None:
     assert "write_authorization" in events
     assert "write_committed" not in events
     assert "write_failed" not in events
+
+
+# ---------------------------------------------------------------------------
+# P1.F.1 — audit_reads flag
+# ---------------------------------------------------------------------------
+
+
+def test_reads_not_audited_by_default(tmp_path: Path) -> None:
+    """Reads must NOT appear in the audit log unless audit_reads=True."""
+    import sqlite3
+
+    drv = _FakeDriver()
+    device = DeviceRef(protocol=drv.PROTOCOL_ID, address="lab1")
+
+    with open_session(
+        drv,
+        device,
+        profile=SessionProfile.LAB,
+        operator="tester",
+        audit_dir=tmp_path,
+    ) as session:
+        ref = next(session.driver_session.enumerate_objects())
+        session.driver_session.read(ref)
+
+    log = next(tmp_path.glob("*.audit.sqlite"))
+    with sqlite3.connect(log) as conn:
+        events = [r[0] for r in conn.execute("SELECT event FROM audit_log ORDER BY seq").fetchall()]
+
+    assert "read_completed" not in events
+
+
+def test_reads_audited_when_flag_set(tmp_path: Path) -> None:
+    """Every read must appear in the audit chain when audit_reads=True."""
+    import sqlite3
+
+    drv = _FakeDriver()
+    device = DeviceRef(protocol=drv.PROTOCOL_ID, address="lab1")
+
+    with open_session(
+        drv,
+        device,
+        profile=SessionProfile.LAB,
+        operator="tester",
+        audit_dir=tmp_path,
+        audit_reads=True,
+    ) as session:
+        ref = next(session.driver_session.enumerate_objects())
+        session.driver_session.read(ref)
+        session.driver_session.read(ref)
+
+    log = next(tmp_path.glob("*.audit.sqlite"))
+    ok, msg = verify_log(log)
+    assert ok, msg
+
+    with sqlite3.connect(log) as conn:
+        events = [r[0] for r in conn.execute("SELECT event FROM audit_log ORDER BY seq").fetchall()]
+
+    assert events.count("read_completed") == 2
+
+
+def test_audit_reads_verify_log_clean_either_way(tmp_path: Path) -> None:
+    """verify_log must pass regardless of the audit_reads setting."""
+    drv = _FakeDriver()
+    device = DeviceRef(protocol=drv.PROTOCOL_ID, address="lab1")
+
+    for flag in (False, True):
+        sub = tmp_path / str(flag)
+        sub.mkdir()
+        with open_session(
+            drv,
+            device,
+            profile=SessionProfile.LAB,
+            operator="tester",
+            audit_dir=sub,
+            audit_reads=flag,
+        ) as session:
+            ref = next(session.driver_session.enumerate_objects())
+            session.driver_session.read(ref)
+
+        log = next(sub.glob("*.audit.sqlite"))
+        ok, msg = verify_log(log)
+        assert ok, f"audit_reads={flag}: {msg}"

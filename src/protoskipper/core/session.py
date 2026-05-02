@@ -26,6 +26,8 @@ from protoskipper.core.audit import AuditLog
 from protoskipper.core.driver import (
     ConfirmCallback,
     DeviceRef,
+    ObjectRef,
+    ReadResult,
     SafetyContext,
     SessionProfile,
     WriteIntent,
@@ -38,6 +40,56 @@ _logger = logging.getLogger(__name__)
 
 
 ConfirmFn = ConfirmCallback
+
+
+class _AuditingDriverSession:
+    """Thin proxy around a DriverSession that records each read in the audit log.
+
+    Only instantiated when ``audit_reads=True`` is passed to
+    :func:`open_session`.  The proxy forwards every attribute access to the
+    underlying session, intercepting only :meth:`read` and :meth:`read_many`
+    to insert audit records.
+
+    Design note: using ``__getattr__`` for delegation keeps the proxy
+    future-proof — new methods added to ``DriverSession`` are forwarded
+    automatically without touching this class.
+    """
+
+    def __init__(self, inner: DriverSession, audit_callback: Callable[..., None]) -> None:
+        # Store in __dict__ directly to bypass __getattr__.
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "_audit", audit_callback)
+
+    def _inner_session(self) -> DriverSession:
+        return object.__getattribute__(self, "_inner")  # type: ignore[no-any-return]
+
+    def _audit_fn(self) -> Callable[..., None]:
+        return object.__getattribute__(self, "_audit")  # type: ignore[no-any-return]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(object.__getattribute__(self, "_inner"), name)
+
+    def read(self, ref: ObjectRef) -> ReadResult:
+        result: ReadResult = self._inner_session().read(ref)
+        self._audit_fn()(
+            event="read_completed",
+            object_id=ref.object_id,
+            quality=result.quality.value,
+            value=repr(result.value),
+        )
+        return result
+
+    def read_many(self, refs: list[ObjectRef]) -> list[ReadResult]:
+        results: list[ReadResult] = self._inner_session().read_many(refs)
+        audit = self._audit_fn()
+        for result in results:
+            audit(
+                event="read_completed",
+                object_id=result.object_ref.object_id,
+                quality=result.quality.value,
+                value=repr(result.value),
+            )
+        return results
 
 
 def default_confirm(intent: WriteIntent, profile: SessionProfile) -> bool:
@@ -95,6 +147,7 @@ def open_session(
     audit_dir: Path,
     confirm: ConfirmFn = default_confirm,
     on_audit_record: Callable[[], None] | None = None,
+    audit_reads: bool = False,
 ) -> Session:
     """Open an audited session against ``device`` using ``driver``.
 
@@ -105,6 +158,11 @@ def open_session(
     ``on_audit_record`` is an optional zero-argument callback invoked
     *after* each row is appended to the audit log.  The GUI uses this to
     keep a live row-count display without polling the SQLite file.
+
+    ``audit_reads`` (default ``False``) controls whether individual read
+    operations are recorded in the audit chain.  Reads are excluded by
+    default to avoid log bloat on watchlist-heavy sessions.  Set to
+    ``True`` for forensic sessions where a complete input record is needed.
     """
     audit_path = audit_dir / _audit_filename(device, operator)
     audit_log = AuditLog.create(audit_path, operator=operator, profile=profile.value)
@@ -134,6 +192,14 @@ def open_session(
 
     audit_log.record(event="connected", protocol=device.protocol, address=device.address)
 
+    # When audit_reads is enabled, wrap the driver session so every read is
+    # recorded in the audit chain.
+    active_driver_session: DriverSession = driver_session
+    if audit_reads:
+        active_driver_session = _AuditingDriverSession(  # type: ignore[assignment]
+            driver_session, _audit_record
+        )
+
     return Session(
         driver=driver,
         device=device,
@@ -141,7 +207,7 @@ def open_session(
         operator=operator,
         audit=audit_log,
         safety=safety,
-        driver_session=driver_session,
+        driver_session=active_driver_session,
     )
 
 
