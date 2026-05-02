@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 38 / 92 tasks complete (41.3%)**
+> **Overall Progress: 41 / 92 tasks complete (44.6%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -682,7 +682,7 @@ type support".
 
 ## P1.E — Robustness
 
-### P1.E.1 Slow-response handling
+### ✅ P1.E.1 Slow-response handling
 
 * **Goal:** A device that takes 30 s to respond does not freeze the GUI.
   (Currently the worker thread blocks; the GUI is fine, but the worker
@@ -695,7 +695,7 @@ type support".
   * `cancel()` on a hung session causes its current read to abort
     within 1 s.
 
-### P1.E.2 Reconnect on transport failure
+### ✅ P1.E.2 Reconnect on transport failure
 
 * **Goal:** If the TCP connection to a device drops, the next read
   attempts a reconnect once before failing.
@@ -707,7 +707,7 @@ type support".
 * **Tests required:**
   * `test_reconnect_after_transport_drop` (integration).
 
-### P1.E.3 Concurrent sessions to the same device
+### ✅ P1.E.3 Concurrent sessions to the same device
 
 * **Goal:** Two sessions to `127.0.0.1:5020/unit=1` work without the
   pymodbus client being shared.
