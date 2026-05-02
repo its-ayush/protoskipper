@@ -46,7 +46,9 @@ from protoskipper.builtin_drivers.modbus.codec import (
     REGISTER_COUNTS,
     decode_bit,
     decode_registers,
+    decode_string,
     encode_bit,
+    encode_string,
     encode_value,
 )
 from protoskipper.core.driver import (
@@ -853,6 +855,10 @@ class _ModbusSession(DriverSession):
             if bit_index is not None:
                 # Bitfield: extract a single bit from the holding register.
                 value = decode_bit(raw_regs[0], int(bit_index))
+            elif dtype in ("ascii", "utf16"):
+                # String type: decode via codec.
+                byte_order = str(ref.metadata.get("byte_order", "big"))
+                value = decode_string(raw_regs, dtype, byte_order)
             elif dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
                 # Decode multi-register types through the codec.
                 byte_order = str(ref.metadata.get("byte_order", "big"))
@@ -912,6 +918,16 @@ class _ModbusSession(DriverSession):
                         " (read-modify-write)"
                     )
                     extra_meta: dict = {"bit": int(bit_index), "rmw": True}
+                elif dtype in ("ascii", "utf16"):
+                    # String type: encode the string to registers.
+                    _, _, parsed_count = _parse_object_id(ref.object_id)
+                    registers = encode_string(str(value), parsed_count, dtype, byte_order)
+                    encoded = b"".join(r.to_bytes(2, "big") for r in registers)
+                    description = (
+                        f"Write holding[{address}:{address + parsed_count - 1}]"
+                        f" := {value!r} ({dtype})"
+                    )
+                    extra_meta = {"registers": registers}
                 elif codec_count > 1:
                     # Multi-register type: encode through the codec.
                     registers = encode_value(float(value), dtype, byte_order, word_order)

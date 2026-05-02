@@ -230,3 +230,87 @@ def encode_bit(register: int, bit: int, value: bool) -> int:
     if value:
         return register | (1 << bit)
     return register & ~(1 << bit) & 0xFFFF
+
+
+# ---------------------------------------------------------------------------
+# String helpers (ascii / utf16)
+# ---------------------------------------------------------------------------
+
+
+def decode_string(
+    registers: list[int],
+    data_type: str,
+    byte_order: str = "big",
+) -> str:
+    """Decode a list of Modbus registers as a null-terminated string.
+
+    Each 16-bit register holds two characters (high byte first for
+    ``byte_order="big"``).  The decoded string is stripped of trailing
+    NUL characters and surrounding whitespace.
+
+    Parameters
+    ----------
+    registers:
+        Raw register values in wire order (ascending address).
+    data_type:
+        ``"ascii"`` or ``"utf16"``.
+    byte_order:
+        Byte order within each register: ``"big"`` (high byte = first
+        character) or ``"little"`` (low byte = first character).
+
+    Returns
+    -------
+    str
+        The decoded, stripped string.
+    """
+    bo_char = "<" if byte_order == "little" else ">"
+    raw = b"".join(struct.pack(f"{bo_char}H", r) for r in registers)
+    if data_type == "ascii":
+        return raw.decode("ascii", errors="replace").rstrip("\x00").strip()
+    if data_type == "utf16":
+        # UTF-16 needs a BOM or an explicit byte-order mark; without one,
+        # we use the configured byte_order.
+        codec = "utf-16-le" if byte_order == "little" else "utf-16-be"
+        return raw.decode(codec, errors="replace").rstrip("\x00").strip()
+    raise ValueError(f"decode_string: unsupported data_type {data_type!r}")
+
+
+def encode_string(
+    value: str,
+    register_count: int,
+    data_type: str,
+    byte_order: str = "big",
+) -> list[int]:
+    """Encode a string into a list of Modbus registers.
+
+    The string is null-padded to ``register_count`` registers (2 bytes each).
+    Characters that do not fit are silently truncated.
+
+    Parameters
+    ----------
+    value:
+        The string to encode.
+    register_count:
+        Number of 16-bit registers to fill.
+    data_type:
+        ``"ascii"`` or ``"utf16"``.
+    byte_order:
+        Byte order within each register.
+
+    Returns
+    -------
+    list[int]
+        List of 16-bit register values in wire order.
+    """
+    max_bytes = register_count * 2
+    if data_type == "ascii":
+        raw = value.encode("ascii", errors="replace")
+    elif data_type == "utf16":
+        codec = "utf-16-le" if byte_order == "little" else "utf-16-be"
+        raw = value.encode(codec, errors="replace")
+    else:
+        raise ValueError(f"encode_string: unsupported data_type {data_type!r}")
+
+    raw = raw[:max_bytes].ljust(max_bytes, b"\x00")
+    bo_char = "<" if byte_order == "little" else ">"
+    return [struct.unpack(f"{bo_char}H", raw[i : i + 2])[0] for i in range(0, max_bytes, 2)]

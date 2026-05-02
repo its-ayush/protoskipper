@@ -16,7 +16,9 @@ import pytest
 from protoskipper.builtin_drivers.modbus.codec import (
     decode_bit,
     decode_registers,
+    decode_string,
     encode_bit,
+    encode_string,
     encode_value,
     required_register_count,
 )
@@ -315,3 +317,67 @@ class TestEncodeBit:
 
     def test_clear_bit_masks_to_16_bits(self) -> None:
         assert encode_bit(0x0000, 0, False) == 0x0000
+
+
+# ---------------------------------------------------------------------------
+# String helpers
+# ---------------------------------------------------------------------------
+
+
+class TestDecodeString:
+    def test_ascii_big_endian(self) -> None:
+        # "AB" → register 0x4142 (A=0x41, B=0x42)
+        assert decode_string([0x4142], "ascii", "big") == "AB"
+
+    def test_ascii_little_endian(self) -> None:
+        # "AB" little → register 0x4241 (B=0x42 at high byte when packed LE)
+        # pack("<H", 0x4241) → b'\x41\x42' → "AB"
+        assert decode_string([0x4241], "ascii", "little") == "AB"
+
+    def test_ascii_null_trimmed(self) -> None:
+        # "A\x00" → just "A"
+        assert decode_string([0x4100], "ascii", "big") == "A"
+
+    def test_ascii_empty(self) -> None:
+        assert decode_string([0x0000, 0x0000], "ascii", "big") == ""
+
+    def test_ascii_multi_register(self) -> None:
+        # "ABCD" → [0x4142, 0x4344]
+        assert decode_string([0x4142, 0x4344], "ascii", "big") == "ABCD"
+
+    def test_utf16_big_endian(self) -> None:
+        # "A" in UTF-16-BE = 0x0041 → register 0x0041
+        assert decode_string([0x0041], "utf16", "big") == "A"
+
+    def test_utf16_null_trimmed(self) -> None:
+        assert decode_string([0x0041, 0x0000], "utf16", "big") == "A"
+
+    def test_unknown_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="unsupported"):
+            decode_string([0x4142], "uint16", "big")
+
+
+class TestEncodeString:
+    def test_ascii_round_trip(self) -> None:
+        regs = encode_string("AB", 1, "ascii", "big")
+        assert decode_string(regs, "ascii", "big") == "AB"
+
+    def test_ascii_null_padded(self) -> None:
+        regs = encode_string("A", 2, "ascii", "big")
+        assert len(regs) == 2
+        assert decode_string(regs, "ascii", "big") == "A"
+
+    def test_ascii_truncated(self) -> None:
+        # "ABCDE" truncated to 2 registers (4 bytes → 4 chars)
+        regs = encode_string("ABCDE", 2, "ascii", "big")
+        assert len(regs) == 2
+        result = decode_string(regs, "ascii", "big")
+        assert result == "ABCD"
+
+    def test_utf16_round_trip(self) -> None:
+        regs = encode_string("A", 1, "utf16", "big")
+        assert decode_string(regs, "utf16", "big") == "A"
+
+    def test_unknown_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="unsupported"):
+            encode_string("X", 1, "uint16", "big")
