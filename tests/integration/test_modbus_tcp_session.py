@@ -233,3 +233,67 @@ def test_reconnect_after_transport_drop(modbus_simulator) -> None:
         assert r3.quality.value == "good", (
             f"Expected GOOD quality after reconnect, got {r3.quality}: {r3.error}"
         )
+
+
+def test_two_concurrent_sessions_independent(modbus_simulator) -> None:
+    """P1.E.3: Two sessions to the same device are fully independent.
+
+    Acceptance criteria:
+    * Each session has its own ModbusTcpClient instance.
+    * Closing one session does not prevent the other from reading.
+    """
+    host, port = modbus_simulator
+
+    drv = ModbusTcpDriver()
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address=f"{host}:{port}/unit=1",
+        label="sim",
+    )
+
+    ref = ObjectRef(
+        device=device,
+        object_id="holding:0",
+        data_type="uint16",
+        access=Access.READ_WRITE,
+        label="hold0",
+    )
+
+    with (
+        tempfile.TemporaryDirectory() as td1,
+        tempfile.TemporaryDirectory() as td2,
+        open_session(
+            drv,
+            device,
+            profile=SessionProfile.LAB,
+            operator="session-a@ci",
+            audit_dir=Path(td1),
+            confirm=lambda i, p: True,
+        ) as session_a,
+        open_session(
+            drv,
+            device,
+            profile=SessionProfile.LAB,
+            operator="session-b@ci",
+            audit_dir=Path(td2),
+            confirm=lambda i, p: True,
+        ) as session_b,
+    ):
+        ds_a = session_a.driver_session
+        ds_b = session_b.driver_session
+
+        # Each session must have its own underlying client instance.
+        assert ds_a._client is not ds_b._client  # type: ignore[union-attr]
+
+        # Both sessions must be independently readable.
+        ra = ds_a.read(ref)
+        rb = ds_b.read(ref)
+        assert ra.quality.value == "good", f"Session A read failed: {ra.error}"
+        assert rb.quality.value == "good", f"Session B read failed: {rb.error}"
+
+    # Both sessions are now closed — verify their audit logs are intact.
+    for td in (td1, td2):
+        logs = list(Path(td).glob("*.audit.sqlite"))
+        assert len(logs) == 1
+        ok, msg = verify_log(logs[0])
+        assert ok, msg
