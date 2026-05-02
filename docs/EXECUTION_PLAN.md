@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 47 / 92 tasks complete (51.1%)**
+> **Overall Progress: 48 / 92 tasks complete (52.2%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -803,7 +803,7 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 
 ## P2.C — Capture analysis basics
 
-### P2.C.1 Per-session timeline view
+### ✅ P2.C.1 Per-session timeline view
 
 * **Acceptance criteria:** Existing packet view becomes the timeline view
   with x-axis time, y-axis row position. No new dependencies.
