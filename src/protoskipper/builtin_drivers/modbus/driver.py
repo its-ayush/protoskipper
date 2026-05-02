@@ -805,6 +805,177 @@ class _ModbusSession(DriverSession):
             )
 
     # -- read -------------------------------------------------------------
+    def read_many(self, refs: list[ObjectRef]) -> list[ReadResult]:
+        """Batch read with contiguous-block optimisation.
+
+        Objects on register tables (``holding``, ``input``) that share the
+        same table and are laid out at consecutive addresses are read in a
+        single FC03/FC04 request.  Coil / discrete tables fall back to the
+        base one-at-a-time implementation because their gains are smaller and
+        their address spaces don't mix with register tables.
+
+        The result list preserves the same order as *refs*.
+        """
+        # Partition into (table, is_batchable) groups.
+        batchable_tables = {"holding", "input"}
+        results: dict[int, ReadResult] = {}
+
+        # Separate batchable refs from the rest.
+        batch_indices: list[tuple[int, ObjectRef]] = []
+        fallback_indices: list[tuple[int, ObjectRef]] = []
+        for i, ref in enumerate(refs):
+            try:
+                table, _, _ = _parse_object_id(ref.object_id)
+            except EncodingError:
+                fallback_indices.append((i, ref))
+                continue
+            if table in batchable_tables:
+                batch_indices.append((i, ref))
+            else:
+                fallback_indices.append((i, ref))
+
+        # Fall back for non-batchable refs.
+        for i, ref in fallback_indices:
+            results[i] = self.read(ref)
+
+        # Group batchable refs by table, then sort by address.
+        table_groups: dict[str, list[tuple[int, ObjectRef]]] = {}
+        for i, ref in batch_indices:
+            table, _, _ = _parse_object_id(ref.object_id)
+            table_groups.setdefault(table, []).append((i, ref))
+
+        for table, group in table_groups.items():
+            # Sort ascending by address so we can find contiguous spans.
+            group.sort(key=lambda t: _parse_object_id(t[1].object_id)[1])
+
+            # Build spans of contiguous refs.
+            span_start = 0
+            while span_start < len(group):
+                span_end = span_start + 1
+                span_addr = _parse_object_id(group[span_start][1].object_id)[1]
+                span_count = self._ref_register_count(group[span_start][1])
+
+                while span_end < len(group):
+                    next_addr = _parse_object_id(group[span_end][1].object_id)[1]
+                    if next_addr == span_addr + span_count:
+                        span_count += self._ref_register_count(group[span_end][1])
+                        span_end += 1
+                    else:
+                        break
+
+                # Fetch the whole span in one request.
+                span = group[span_start:span_end]
+                self._read_span(table, span_addr, span_count, span, results)
+                span_start = span_end
+
+        return [results[i] for i in range(len(refs))]
+
+    def _ref_register_count(self, ref: ObjectRef) -> int:
+        """Return the number of 16-bit registers occupied by *ref*."""
+        dtype = ref.data_type
+        codec_count = REGISTER_COUNTS.get(dtype, 0)
+        if codec_count > 0:
+            return codec_count
+        _, _, parsed_count = _parse_object_id(ref.object_id)
+        return parsed_count
+
+    def _read_span(
+        self,
+        table: str,
+        start_address: int,
+        total_count: int,
+        span: list[tuple[int, ObjectRef]],
+        results: dict[int, ReadResult],
+    ) -> None:
+        """Issue one bulk request for *span* and populate *results*."""
+        ts = datetime.now(timezone.utc)
+        unit = _u(self._unit)
+        try:
+            if table == "holding":
+                resp = self._client.read_holding_registers(
+                    address=start_address, count=total_count, **unit
+                )
+            else:  # input
+                resp = self._client.read_input_registers(
+                    address=start_address, count=total_count, **unit
+                )
+        except Exception as exc:
+            _logger.warning(
+                "Modbus bulk read failed for %s[%d..%d]: %s",
+                table,
+                start_address,
+                start_address + total_count - 1,
+                exc,
+            )
+            for i, ref in span:
+                results[i] = ReadResult(
+                    object_ref=ref,
+                    value=None,
+                    quality=Quality.BAD,
+                    timestamp=ts,
+                    error=repr(exc),
+                )
+            return
+
+        if resp.isError():
+            for i, ref in span:
+                results[i] = ReadResult(
+                    object_ref=ref,
+                    value=None,
+                    quality=Quality.BAD,
+                    timestamp=ts,
+                    error=str(resp),
+                )
+            return
+
+        all_regs = list(resp.registers)
+        cursor = 0
+        for i, ref in span:
+            ref_count = self._ref_register_count(ref)
+            raw_regs = all_regs[cursor : cursor + ref_count]
+            cursor += ref_count
+            results[i] = self._decode_register_slice(ref, raw_regs, ts)
+
+    def _decode_register_slice(
+        self,
+        ref: ObjectRef,
+        raw_regs: list[int],
+        ts: Any,
+    ) -> ReadResult:
+        """Decode a pre-fetched register slice into a :class:`ReadResult`."""
+        dtype = ref.data_type
+        value: Any
+        bit_index = ref.metadata.get("bit")
+        if bit_index is not None:
+            value = decode_bit(raw_regs[0], int(bit_index))
+        elif dtype in ("ascii", "utf16"):
+            byte_order = str(ref.metadata.get("byte_order", "big"))
+            value = decode_string(raw_regs, dtype, byte_order)
+        elif dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
+            byte_order = str(ref.metadata.get("byte_order", "big"))
+            word_order = str(ref.metadata.get("word_order", "big"))
+            try:
+                value = decode_registers(raw_regs, dtype, byte_order, word_order)
+            except Exception as exc:
+                return ReadResult(
+                    object_ref=ref,
+                    value=None,
+                    quality=Quality.BAD,
+                    timestamp=ts,
+                    error=repr(exc),
+                )
+        else:
+            value = raw_regs[0] if len(raw_regs) == 1 else raw_regs
+
+        value = self._apply_read_scale(ref, value)
+        return ReadResult(
+            object_ref=ref,
+            value=value,
+            quality=Quality.GOOD,
+            timestamp=ts,
+            raw_bytes=None,
+        )
+
     def read(self, ref: ObjectRef) -> ReadResult:
         table, address, parsed_count = _parse_object_id(ref.object_id)
         ts = datetime.now(timezone.utc)

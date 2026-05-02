@@ -218,3 +218,147 @@ def test_parse_object_id(object_id: str, expected: tuple[str, int, int]) -> None
 def test_parse_object_id_rejects_bad_input(object_id: str) -> None:
     with pytest.raises(EncodingError):
         _parse_object_id(object_id)
+
+
+# ---------------------------------------------------------------------------
+# read_many contiguous-range optimisation (P1.C.1)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRegistersResponse:
+    """Minimal pymodbus response stub for register reads."""
+
+    def __init__(self, registers: list[int]) -> None:
+        self.registers = registers
+
+    def isError(self) -> bool:
+        return False
+
+
+class _FakeErrorResponse:
+    def isError(self) -> bool:
+        return True
+
+    def __str__(self) -> str:
+        return "simulated error"
+
+
+def _make_session(client: object) -> object:
+    """Construct a _ModbusSession with a mock client (no real socket)."""
+    from unittest.mock import MagicMock
+
+    from protoskipper.builtin_drivers.modbus.driver import _ModbusSession
+    from protoskipper.core.driver import DeviceRef
+
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address="127.0.0.1:502",
+        label="test",
+        metadata={},
+    )
+    return _ModbusSession(
+        client=client,  # type: ignore[arg-type]
+        unit=1,
+        device=device,
+        safety=MagicMock(),
+    )
+
+
+def _make_ref(object_id: str, dtype: str = "uint16") -> object:
+    from protoskipper.core.driver import Access, DeviceRef, ObjectRef
+
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address="127.0.0.1:502",
+        label="test",
+        metadata={},
+    )
+    return ObjectRef(
+        device=device,
+        object_id=object_id,
+        data_type=dtype,
+        access=Access.READ_ONLY,
+        unit=None,
+        label=object_id,
+    )
+
+
+def test_read_many_contiguous_holding_issues_one_request() -> None:
+    """10 uint16 refs at holding:0..holding:9 → exactly 1 pymodbus call."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.read_holding_registers.return_value = _FakeRegistersResponse(list(range(10)))
+
+    session = _make_session(client)
+    refs = [_make_ref(f"holding:{i}") for i in range(10)]
+    results = session.read_many(refs)
+
+    assert client.read_holding_registers.call_count == 1
+    call_kwargs = client.read_holding_registers.call_args
+    assert call_kwargs.kwargs["address"] == 0
+    assert call_kwargs.kwargs["count"] == 10
+
+    assert len(results) == 10
+    assert [r.value for r in results] == list(range(10))
+
+
+def test_read_many_two_disjoint_blocks_issues_two_requests() -> None:
+    """holding:0-2 and holding:10-12 are disjoint → 2 wire requests."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.read_holding_registers.side_effect = [
+        _FakeRegistersResponse([1, 2, 3]),
+        _FakeRegistersResponse([10, 11, 12]),
+    ]
+
+    session = _make_session(client)
+    refs = [
+        _make_ref("holding:0"),
+        _make_ref("holding:1"),
+        _make_ref("holding:2"),
+        _make_ref("holding:10"),
+        _make_ref("holding:11"),
+        _make_ref("holding:12"),
+    ]
+    results = session.read_many(refs)
+
+    assert client.read_holding_registers.call_count == 2
+    assert len(results) == 6
+    assert [r.value for r in results] == [1, 2, 3, 10, 11, 12]
+
+
+def test_read_many_preserves_input_order() -> None:
+    """Results must match the input ref order even when refs are unsorted."""
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    # Refs are given in reverse address order; batch should still coalesce.
+    client.read_holding_registers.return_value = _FakeRegistersResponse([7, 8, 9])
+
+    session = _make_session(client)
+    # refs in reverse order: holding:2, holding:1, holding:0
+    refs = [_make_ref(f"holding:{i}") for i in [2, 1, 0]]
+    results = session.read_many(refs)
+
+    assert client.read_holding_registers.call_count == 1
+    # Values should be 9, 8, 7 (address 2→9, address 1→8, address 0→7)
+    assert [r.value for r in results] == [9, 8, 7]
+
+
+def test_read_many_bulk_error_propagates_to_all_in_span() -> None:
+    """If the bulk request fails, all refs in that span get Quality.BAD."""
+    from unittest.mock import MagicMock
+
+    from protoskipper.core.driver import Quality
+
+    client = MagicMock()
+    client.read_holding_registers.return_value = _FakeErrorResponse()
+
+    session = _make_session(client)
+    refs = [_make_ref("holding:0"), _make_ref("holding:1")]
+    results = session.read_many(refs)
+
+    assert all(r.quality == Quality.BAD for r in results)
+    assert client.read_holding_registers.call_count == 1
