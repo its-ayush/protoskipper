@@ -53,9 +53,15 @@ class ObjectBrowserPanel(QWidget):
 
         self._toolbar = QToolBar(self)
         self._read_button = QPushButton("Read selected", self)
+        self._read_button.setAccessibleName("Read selected object")
+        self._read_button.setToolTip("Read the selected register  [F5]")
         self._read_all_button = QPushButton("Read all", self)
+        self._read_all_button.setAccessibleName("Read all objects")
+        self._read_all_button.setToolTip("Read all registers  [Shift+F5]")
         self._write_button = QPushButton("Write…", self)
+        self._write_button.setAccessibleName("Write to selected object")
         self._watch_button = QPushButton("Add to Watchlist", self)
+        self._watch_button.setAccessibleName("Add selected object to watchlist")
         for btn in (
             self._read_button,
             self._read_all_button,
@@ -90,6 +96,16 @@ class ObjectBrowserPanel(QWidget):
     def current_session_id(self) -> SessionId | None:
         """Return the currently displayed session's id, or None."""
         return self._session_id
+
+    # ---- P3.B.2 public read API (invoked by MainWindow F5/Shift+F5) -----
+
+    def read_selected(self) -> None:
+        """Read the currently selected register. Bound to F5 in MainWindow."""
+        self._on_read_clicked()
+
+    def read_all(self) -> None:
+        """Read all visible registers. Bound to Shift+F5 in MainWindow."""
+        self._on_read_all_clicked()
 
     # ---- selection helper -----------------------------------------------
 

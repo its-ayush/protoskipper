@@ -17,17 +17,22 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QSettings, Qt, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QStatusBar,
     QTabWidget,
     QToolBar,
+    QVBoxLayout,
 )
 
 from protoskipper import __version__
@@ -38,6 +43,7 @@ from protoskipper.core.plugin_loader import load_protocol_drivers
 from protoskipper.gui.dialogs import (
     AuditViewDialog,
     NewConnectionDialog,
+    PreferencesDialog,
     ProbeNetworkDialog,
     ProbeSelection,
     SafetyConfirmDialog,
@@ -57,6 +63,7 @@ from protoskipper.gui.services import (
 from protoskipper.gui.services.types import CapturedFrame as GuiFrame
 from protoskipper.gui.services.types import Direction, SessionId
 from protoskipper.gui.services.write_flow import WriteFlowController
+from protoskipper.gui.theme import apply_app_theme, apply_density
 
 _logger = logging.getLogger(__name__)
 
@@ -107,6 +114,14 @@ class MainWindow(QMainWindow):
         # Restore persisted layout (window geometry + dock state).
         self._restore_settings()
 
+        # P3.D: Apply saved theme and density (must run after _build_actions
+        # so the View menu check states exist to update).
+        self._apply_theme(PreferencesDialog.saved_theme(), _save=False)
+        self._apply_density(PreferencesDialog.saved_density() == "Compact", _save=False)
+
+        # P3.E.1: Show welcome dialog on first ever launch.
+        self._check_first_run()
+
     # ---- construction ---------------------------------------------------
 
     def _build_actions(self) -> None:
@@ -134,6 +149,20 @@ class MainWindow(QMainWindow):
         file_menu = menu.addMenu("&File")
         file_menu.addAction(self._action_probe_network)
         file_menu.addAction(self._action_new_connection)
+        file_menu.addSeparator()
+
+        self._action_close_session = QAction(self.tr("Close Session"), self)
+        self._action_close_session.setShortcut("Ctrl+W")
+        self._action_close_session.setEnabled(False)
+        self._action_close_session.triggered.connect(self._disconnect_current_session)
+
+        self._action_close_all_sessions = QAction(self.tr("Close All Sessions"), self)
+        self._action_close_all_sessions.setShortcut("Ctrl+Shift+W")
+        self._action_close_all_sessions.setEnabled(False)
+        self._action_close_all_sessions.triggered.connect(self._close_all_sessions)
+
+        file_menu.addAction(self._action_close_session)
+        file_menu.addAction(self._action_close_all_sessions)
         file_menu.addAction(self._action_disconnect)
         file_menu.addSeparator()
         file_menu.addAction(self._action_quit)
@@ -175,8 +204,88 @@ class MainWindow(QMainWindow):
         audit_menu.addAction(self._action_audit_verify)
         audit_menu.addAction(self._action_audit_view)
 
+        # P3.A.2 Tools menu — Preferences…
+        self._action_preferences = QAction(self.tr("Preferences\u2026"), self)
+        self._action_preferences.setShortcut("Ctrl+,")
+        self._action_preferences.triggered.connect(self._on_preferences)
+        tools_menu = menu.addMenu(self.tr("&Tools"))
+        tools_menu.addAction(self._action_preferences)
+
+        # P3.D View menu — Theme + Density
+        self._action_theme_light = QAction(self.tr("&Light"), self)
+        self._action_theme_light.setCheckable(True)
+        self._action_theme_light.setChecked(True)
+        self._action_theme_light.triggered.connect(lambda: self._apply_theme("Light"))
+
+        self._action_theme_dark = QAction(self.tr("&Dark"), self)
+        self._action_theme_dark.setCheckable(True)
+        self._action_theme_dark.triggered.connect(lambda: self._apply_theme("Dark"))
+
+        self._theme_group = QActionGroup(self)
+        self._theme_group.addAction(self._action_theme_light)
+        self._theme_group.addAction(self._action_theme_dark)
+        self._theme_group.setExclusive(True)
+
+        self._action_density_comfortable = QAction(self.tr("&Comfortable"), self)
+        self._action_density_comfortable.setCheckable(True)
+        self._action_density_comfortable.setChecked(True)
+        self._action_density_comfortable.triggered.connect(
+            lambda: self._apply_density(compact=False)
+        )
+
+        self._action_density_compact = QAction(self.tr("Co&mpact"), self)
+        self._action_density_compact.setCheckable(True)
+        self._action_density_compact.triggered.connect(lambda: self._apply_density(compact=True))
+
+        self._density_group = QActionGroup(self)
+        self._density_group.addAction(self._action_density_comfortable)
+        self._density_group.addAction(self._action_density_compact)
+        self._density_group.setExclusive(True)
+
+        view_menu = menu.addMenu(self.tr("&View"))
+        theme_submenu = view_menu.addMenu(self.tr("&Theme"))
+        theme_submenu.addAction(self._action_theme_light)
+        theme_submenu.addAction(self._action_theme_dark)
+        density_submenu = view_menu.addMenu(self.tr("&Density"))
+        density_submenu.addAction(self._action_density_comfortable)
+        density_submenu.addAction(self._action_density_compact)
+
+        # P3.B.2 / P3.E.2 Help menu — shortcuts + docs + report bug
+        self._action_keyboard_shortcuts = QAction(self.tr("Keyboard Shortcuts\u2026"), self)
+        self._action_keyboard_shortcuts.triggered.connect(self._show_keyboard_shortcuts)
+
+        self._action_docs = QAction(self.tr("Documentation"), self)
+        self._action_docs.triggered.connect(self._open_docs)
+
+        self._action_report_bug = QAction(self.tr("Report Bug\u2026"), self)
+        self._action_report_bug.triggered.connect(self._open_report_bug)
+
         help_menu = menu.addMenu("&Help")
+        help_menu.addAction(self._action_keyboard_shortcuts)
+        help_menu.addSeparator()
+        help_menu.addAction(self._action_docs)
+        help_menu.addAction(self._action_report_bug)
+        help_menu.addSeparator()
         help_menu.addAction(self._action_about)
+
+        # P3.B.2 F5 / Shift+F5 — window-level shortcuts for the object browser.
+        # These are plain QActions added to the window so they fire regardless
+        # of which child widget has focus.
+        self._action_read_selected = QAction(self.tr("Read Selected"), self)
+        self._action_read_selected.setShortcut("F5")
+        self._action_read_selected.triggered.connect(
+            lambda: (
+                self._object_browser.read_selected() if hasattr(self, "_object_browser") else None
+            )
+        )
+        self.addAction(self._action_read_selected)
+
+        self._action_read_all = QAction(self.tr("Read All"), self)
+        self._action_read_all.setShortcut("Shift+F5")
+        self._action_read_all.triggered.connect(
+            lambda: self._object_browser.read_all() if hasattr(self, "_object_browser") else None
+        )
+        self.addAction(self._action_read_all)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main", self)
@@ -320,7 +429,9 @@ class MainWindow(QMainWindow):
                 "protoskipper[modbus]` and restart.",
             )
             return
-        dialog = NewConnectionDialog(parent=self)
+        dialog = NewConnectionDialog(
+            default_operator=PreferencesDialog.default_operator(), parent=self
+        )
         if prefill is not None:
             dialog.set_protocol(prefill.protocol_id)
             dialog.set_address(prefill.device.address)
@@ -368,7 +479,11 @@ class MainWindow(QMainWindow):
         self._object_browser.set_session(session_id)
         self._packet_view.set_session(session_id)
         info = self._state.session(SessionId(session_id))
-        self._action_disconnect.setEnabled(info is not None and info.is_open)
+        is_open = info is not None and info.is_open
+        self._action_disconnect.setEnabled(is_open)
+        self._action_close_session.setEnabled(is_open)
+        has_any = any(i.is_open for i in self._state.sessions())
+        self._action_close_all_sessions.setEnabled(has_any)
         # P0.D.2: Update profile chip to reflect the newly selected session.
         self._update_profile_chip(info.profile if info else None)
 
@@ -410,10 +525,13 @@ class MainWindow(QMainWindow):
     # ---- P0.D.3 disconnect button state ---------------------------------
 
     def _on_session_closed_update_disconnect(self, session_id: str) -> None:
-        """Keep Disconnect button in sync when the current session closes."""
+        """Keep Disconnect / Close actions in sync when the current session closes."""
         current = self._currently_selected_session()
         if current is None or current == session_id:
             self._action_disconnect.setEnabled(False)
+            self._action_close_session.setEnabled(False)
+        has_any = any(i.is_open for i in self._state.sessions())
+        self._action_close_all_sessions.setEnabled(has_any)
 
     # ---- write flow -----------------------------------------------------
 
@@ -551,6 +669,169 @@ class MainWindow(QMainWindow):
         self._action_disconnect.setEnabled(
             not active and self._currently_selected_session() is not None
         )
+
+    # ---- P3.A.2 Preferences --------------------------------------------
+
+    def _on_preferences(self) -> None:
+        """Tools → Preferences…"""
+        dlg = PreferencesDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._apply_theme(PreferencesDialog.saved_theme())
+            self._apply_density(PreferencesDialog.saved_density() == "Compact")
+
+    # ---- P3.D.1 Theme switcher -----------------------------------------
+
+    def _apply_theme(self, name: str, *, _save: bool = True) -> None:
+        """Apply *name* ("Light" or "Dark") to the app and persist the choice."""
+        apply_app_theme(name)
+        if _save:
+            QSettings("DataSailors", "ProtoSkipper").setValue("theme", name)
+        # Update View → Theme check states (guard: may not exist during init).
+        if hasattr(self, "_action_theme_light"):
+            self._action_theme_light.setChecked(name != "Dark")
+            self._action_theme_dark.setChecked(name == "Dark")
+
+    # ---- P3.D.2 Compact density mode -----------------------------------
+
+    def _apply_density(self, compact: bool, *, _save: bool = True) -> None:
+        """Apply compact or comfortable density and persist the choice."""
+        apply_density(compact)
+        if _save:
+            QSettings("DataSailors", "ProtoSkipper").setValue(
+                "density", "Compact" if compact else "Comfortable"
+            )
+        if hasattr(self, "_action_density_comfortable"):
+            self._action_density_comfortable.setChecked(not compact)
+            self._action_density_compact.setChecked(compact)
+
+    # ---- P3.B.2 Keyboard shortcuts dialog ------------------------------
+
+    def _show_keyboard_shortcuts(self) -> None:
+        """Help → Keyboard Shortcuts…"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(self.tr("Keyboard Shortcuts"))
+        shortcuts = [
+            ("Ctrl+P", self.tr("Probe network")),
+            ("Ctrl+N", self.tr("New connection")),
+            ("Ctrl+W", self.tr("Close current session")),
+            ("Ctrl+Shift+W", self.tr("Close all sessions")),
+            ("Ctrl+,", self.tr("Preferences")),
+            ("F5", self.tr("Read selected register")),
+            ("Shift+F5", self.tr("Read all registers")),
+            ("Ctrl+Shift+R", self.tr("Start capture")),
+            ("Ctrl+Shift+T", self.tr("Stop capture")),
+            ("Ctrl+Shift+S", self.tr("Save capture")),
+            ("Ctrl+Shift+O", self.tr("Open capture file")),
+            ("Ctrl+Q", self.tr("Quit")),
+        ]
+        rows = "".join(
+            f"<tr><td style='padding:2px 16px 2px 4px'><b>{k}</b></td>"
+            f"<td style='padding:2px 4px'>{v}</td></tr>"
+            for k, v in shortcuts
+        )
+        label = QLabel(f"<table>{rows}</table>", dlg)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dlg)
+        buttons.rejected.connect(dlg.reject)
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(label)
+        layout.addWidget(buttons)
+        dlg.exec()
+
+    # ---- P3.E.2 In-app documentation links -----------------------------
+
+    def _open_docs(self) -> None:
+        """Help → Documentation — opens the project wiki in a browser."""
+        QDesktopServices.openUrl(QUrl("https://github.com/datasailors/protoskipper/wiki"))
+
+    def _open_report_bug(self) -> None:
+        """Help → Report Bug… — opens the GitHub new-issue form."""
+        QDesktopServices.openUrl(QUrl("https://github.com/datasailors/protoskipper/issues/new"))
+
+    # ---- P3.E.1 First-run welcome dialog --------------------------------
+
+    def _check_first_run(self) -> None:
+        """Show a one-time welcome dialog on the very first launch."""
+        settings = QSettings("DataSailors", "ProtoSkipper")
+        if settings.value("shown_welcome", False, bool):
+            return
+        settings.setValue("shown_welcome", True)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(self.tr("Welcome to ProtoSkipper"))
+        dlg.setMinimumWidth(480)
+
+        msg = QLabel(
+            self.tr(
+                "<h3>Welcome to ProtoSkipper!</h3>"
+                "<p>ProtoSkipper is an open-source SCADA/BMS protocol testing "
+                "and commissioning toolkit.</p>"
+                "<p><b>Getting started:</b></p>"
+                "<ul>"
+                "<li>Click <b>Probe Network\u2026</b> (Ctrl+P) to discover devices on "
+                "your network.</li>"
+                "<li>Click <b>New Connection\u2026</b> (Ctrl+N) to connect directly.</li>"
+                "<li>No hardware? Run the built-in Modbus TCP simulator on "
+                "<tt>localhost:5020</tt>.</li>"
+                "</ul>"
+            ),
+            dlg,
+        )
+        msg.setWordWrap(True)
+        msg.setTextFormat(Qt.TextFormat.RichText)
+
+        sim_button = QPushButton(self.tr("Run Modbus Simulator"), dlg)
+        sim_button.setToolTip(self.tr("Start a local Modbus TCP test server on localhost:5020"))
+        sim_button.clicked.connect(self._run_simulator)
+
+        probe_button = QPushButton(self.tr("Probe Network\u2026"), dlg)
+        probe_button.clicked.connect(dlg.accept)
+        probe_button.clicked.connect(self._open_probe_dialog)
+
+        close_button = QPushButton(self.tr("Get Started"), dlg)
+        close_button.clicked.connect(dlg.accept)
+        close_button.setDefault(True)
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(sim_button)
+        button_row.addStretch()
+        button_row.addWidget(probe_button)
+        button_row.addWidget(close_button)
+
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(msg)
+        layout.addLayout(button_row)
+        dlg.exec()
+
+    def _run_simulator(self) -> None:
+        """Start ``protoskipper sim modbus`` as a background QProcess."""
+        import sys
+
+        from PySide6.QtCore import QProcess
+
+        proc = QProcess(self)
+        proc.start(sys.executable, ["-m", "protoskipper", "sim", "modbus"])
+        if proc.waitForStarted(2000):
+            self.statusBar().showMessage(
+                self.tr("Modbus simulator started on localhost:5020"), 5000
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                self.tr("Simulator"),
+                self.tr(
+                    "Could not start the simulator automatically.\n"
+                    "Run manually:  protoskipper sim modbus"
+                ),
+            )
+
+    # ---- P3.B.2 Close-all sessions helper --------------------------------
+
+    def _close_all_sessions(self) -> None:
+        """Close every open session (bound to Ctrl+Shift+W)."""
+        for info in list(self._state.sessions()):
+            if info.is_open:
+                self._disconnect_session(info.session_id)
 
     # ---- P2.B.1 audit verify -------------------------------------------
 

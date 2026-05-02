@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 48 / 92 tasks complete (52.2%)**
+> **Overall Progress: 60 / 92 tasks complete (65.2%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -820,17 +820,17 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 
 ## P3.A — Settings persistence
 
-### P3.A.1 QSettings-backed recent connections
+### P3.A.1 QSettings-backed recent connections ✅
 
 * **Acceptance criteria:** New Connection dialog auto-completes from
   the most-recent 10 connections. Persists across app restarts.
 
-### P3.A.2 Default operator + audit dir
+### P3.A.2 Default operator + audit dir ✅
 
 * **Acceptance criteria:** Settings dialog under `Tools → Preferences…`
   exposes default operator email, audit dir, default profile, theme.
 
-### P3.A.3 Watchlist save/load JSON
+### P3.A.3 Watchlist save/load JSON ✅
 
 * **Acceptance criteria:** Watchlist contents per profile saved to
   `~/.config/protoskipper/watchlists/{profile}.json` on demand and
@@ -838,12 +838,12 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 
 ## P3.B — Accessibility
 
-### P3.B.1 `setAccessibleName` everywhere
+### P3.B.1 `setAccessibleName` everywhere ✅
 
 * **Acceptance criteria:** Screen-reader smoke on macOS VoiceOver and
   NVDA reads every actionable widget meaningfully.
 
-### P3.B.2 Keyboard shortcuts complete
+### P3.B.2 Keyboard shortcuts complete ✅
 
 * **Acceptance criteria:**
   * F5 = Read selected
@@ -853,44 +853,44 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
   * Ctrl+, = Preferences
   * All documented in `Help → Keyboard shortcuts…`
 
-### P3.B.3 Tab order audit
+### P3.B.3 Tab order audit ✅
 
 * **Acceptance criteria:** Manual tab-order test scripted in
   `docs/manual-tests/m_tab_order.md` passes on every dialog.
 
 ## P3.C — Internationalisation scaffolding
 
-### P3.C.1 `tr()` wrap every user-facing string
+### P3.C.1 `tr()` wrap every user-facing string ✅
 
 * **Acceptance criteria:** `lupdate` produces a `protoskipper_en.ts` with
   every visible string. Compiles to `.qm` via `lrelease`. App still
   renders English when no translation is loaded.
 
-### P3.C.2 Translation framework documented
+### P3.C.2 Translation framework documented ✅
 
 * **Files touched:** `docs/I18N.md` (new).
 
 ## P3.D — Theming
 
-### P3.D.1 Theme switcher
+### P3.D.1 Theme switcher ✅
 
 * **Acceptance criteria:** `View → Theme → Light / Dark` switches and
   persists. Active theme reapplies on app restart.
 
-### P3.D.2 Compact density mode
+### P3.D.2 Compact density mode ✅
 
 * **Acceptance criteria:** `View → Density → Comfortable / Compact`
   resizes paddings and font sizes for laptop-screen field use.
 
 ## P3.E — Help & onboarding
 
-### P3.E.1 First-run welcome
+### P3.E.1 First-run welcome ✅
 
 * **Acceptance criteria:** First launch shows a one-time welcome dialog
   pointing the user at `Probe Network…` and a "Run the simulator" button
   that starts `protoskipper sim modbus` in a background process.
 
-### P3.E.2 In-app help
+### P3.E.2 In-app help ✅
 
 * **Acceptance criteria:** `Help → Documentation` opens the rendered
   docs site in the system browser. `Help → Report bug` opens a pre-filled

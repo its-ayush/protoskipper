@@ -101,3 +101,67 @@ def set_active_theme(theme: Theme) -> None:
     application-state signal to force a repaint when called at runtime."""
     global _active
     _active = theme
+
+
+# ---------------------------------------------------------------------------
+# P3.D.1 Runtime theme application
+# ---------------------------------------------------------------------------
+
+
+def apply_app_theme(name: str) -> None:
+    """Apply *name* ("Light" or "Dark") to the running QApplication.
+
+    Sets the active :class:`Theme` token set and applies a QPalette so that
+    native Qt widgets pick up dark colours without requiring an external
+    stylesheet library.  Uses the "Fusion" style as a cross-platform base
+    that honours custom palettes correctly.
+    """
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    if name == "Dark":
+        set_active_theme(DARK_THEME)
+        app.setStyle("Fusion")
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#1e1e2e"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#cdd6f4"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#181825"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1e1e2e"))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#313244"))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#cdd6f4"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#cdd6f4"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#313244"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#cdd6f4"))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor("#f38ba8"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#89b4fa"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#1e1e2e"))
+        palette.setColor(QPalette.ColorRole.Link, QColor("#89dceb"))
+        app.setPalette(palette)
+    else:
+        set_active_theme(LIGHT_THEME)
+        app.setStyle("Fusion")
+        app.setPalette(QPalette())  # reset to Qt default
+
+
+# ---------------------------------------------------------------------------
+# P3.D.2 Compact density mode
+# ---------------------------------------------------------------------------
+
+_COMPACT_QSS = """
+QTableView::item { min-height: 18px; padding: 1px 3px; }
+QTreeView::item  { min-height: 18px; padding: 1px 3px; }
+"""
+
+
+def apply_density(compact: bool) -> None:
+    """Apply compact or comfortable row spacing to the running QApplication."""
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.setStyleSheet(_COMPACT_QSS if compact else "")

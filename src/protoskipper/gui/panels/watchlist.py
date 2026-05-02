@@ -8,9 +8,13 @@ enabled requires explicit confirmation.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -25,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from protoskipper.core.driver import SessionProfile
 from protoskipper.gui.models.watchlist_model import WatchlistModel
-from protoskipper.gui.services.app_state import ApplicationState
+from protoskipper.gui.services.app_state import ApplicationState, SessionInfo
 from protoskipper.gui.services.session_manager import SessionManager
 from protoskipper.gui.services.types import SessionId
 
@@ -37,6 +41,8 @@ _POLL_OPTIONS: list[tuple[str, int | None]] = [
     ("30 s", 30000),
     ("Custom…", -1),  # -1 → open input dialog
 ]
+
+_WATCHLIST_DIR = Path.home() / ".config" / "protoskipper" / "watchlists"
 
 
 class WatchlistPanel(QWidget):
@@ -60,15 +66,28 @@ class WatchlistPanel(QWidget):
 
         self._toolbar = QToolBar(self)
         self._refresh_button = QPushButton("Refresh", self)
+        self._refresh_button.setAccessibleName("Refresh all watchlist entries")
         self._refresh_selected_button = QPushButton("Refresh selected", self)
+        self._refresh_selected_button.setAccessibleName("Refresh selected watchlist entry")
         self._remove_button = QPushButton("Remove", self)
+        self._remove_button.setAccessibleName("Remove selected entry from watchlist")
+        self._save_watchlist_button = QPushButton("Save…", self)
+        self._save_watchlist_button.setAccessibleName("Save watchlist to JSON file")
+        self._save_watchlist_button.setToolTip("Save watchlist to JSON (grouped by profile)")
+        self._load_watchlist_button = QPushButton("Load…", self)
+        self._load_watchlist_button.setAccessibleName("Load watchlist from JSON file")
+        self._load_watchlist_button.setToolTip("Load watchlist entries from a saved JSON file")
         self._toolbar.addWidget(self._refresh_button)
         self._toolbar.addWidget(self._refresh_selected_button)
         self._toolbar.addWidget(self._remove_button)
+        self._toolbar.addWidget(self._save_watchlist_button)
+        self._toolbar.addWidget(self._load_watchlist_button)
 
         self._refresh_button.clicked.connect(self._on_refresh_all)
         self._refresh_selected_button.clicked.connect(self._on_refresh_selected)
         self._remove_button.clicked.connect(self._on_remove_selected)
+        self._save_watchlist_button.clicked.connect(self._on_save_watchlist)
+        self._load_watchlist_button.clicked.connect(self._on_load_watchlist)
 
         # ---- polling timer controls --------------------------------------
         poll_bar = QWidget(self)
@@ -89,6 +108,8 @@ class WatchlistPanel(QWidget):
 
         # Cancel polling when any session closes.
         self._state.session_closed.connect(self._on_session_closed)
+        # P3.A.3: Auto-restore saved watchlist entries when a session opens.
+        self._state.session_opened.connect(self._on_session_opened_restore)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -127,6 +148,110 @@ class WatchlistPanel(QWidget):
             return
         sid, obj = row
         self._state.remove_from_watchlist(SessionId(sid), obj)
+
+    # ---- P3.A.3 save / load watchlist -----------------------------------
+
+    def _on_save_watchlist(self) -> None:
+        """Save current watchlist entries to per-profile JSON files."""
+        entries_by_profile: dict[str, list[dict]] = {}
+        for sid, obj in self._state.watchlist():
+            info = self._state.session(sid)
+            if info is None:
+                continue
+            profile = info.profile.value
+            if profile not in entries_by_profile:
+                entries_by_profile[profile] = []
+            entries_by_profile[profile].append(
+                {
+                    "protocol": info.device.protocol,
+                    "device_address": info.device.address,
+                    "object_id": obj.object_id,
+                    "object_label": obj.label or "",
+                    "data_type": obj.data_type,
+                    "unit": obj.unit or "",
+                }
+            )
+        if not entries_by_profile:
+            QMessageBox.information(self, "Save Watchlist", "The watchlist is empty.")
+            return
+        _WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
+        for profile, entries in entries_by_profile.items():
+            json_path = _WATCHLIST_DIR / f"{profile}.json"
+            json_path.write_text(json.dumps(entries, indent=2))
+        profiles = ", ".join(entries_by_profile.keys())
+        QMessageBox.information(
+            self, "Save Watchlist", f"Watchlist saved for profile(s): {profiles}"
+        )
+
+    def _on_load_watchlist(self) -> None:
+        """Load watchlist entries from a user-selected JSON file."""
+        start_dir = str(_WATCHLIST_DIR) if _WATCHLIST_DIR.exists() else str(Path.home())
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Watchlist",
+            start_dir,
+            "JSON watchlists (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        try:
+            entries: list[dict] = json.loads(Path(path_str).read_text())
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Watchlist", f"Could not read file: {exc}")
+            return
+        added = self._restore_entries(entries)
+        QMessageBox.information(
+            self,
+            "Load Watchlist",
+            f"Added {added} entr{'y' if added == 1 else 'ies'} to watchlist.",
+        )
+
+    def _on_session_opened_restore(self, session_id: str, _device: object, profile: object) -> None:
+        """Auto-restore watchlist entries saved for this session's profile and device."""
+        info: SessionInfo | None = self._state.session(SessionId(session_id))
+        if info is None:
+            return
+        profile_name = info.profile.value
+        json_path = _WATCHLIST_DIR / f"{profile_name}.json"
+        if not json_path.exists():
+            return
+        try:
+            entries: list[dict] = json.loads(json_path.read_text())
+        except Exception:
+            return
+        # Filter to entries matching this specific device.
+        relevant = [
+            e
+            for e in entries
+            if isinstance(e, dict)
+            and e.get("protocol") == info.device.protocol
+            and e.get("device_address") == info.device.address
+        ]
+        self._restore_entries(relevant)
+
+    def _restore_entries(self, entries: list[dict]) -> int:
+        """Match *entries* against open sessions and add found objects to watchlist.
+
+        Returns the number of entries successfully added.
+        """
+        added = 0
+        for info in self._state.sessions():
+            if not info.is_open:
+                continue
+            sid = SessionId(info.session_id)
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("protocol") != info.device.protocol:
+                    continue
+                if entry.get("device_address") != info.device.address:
+                    continue
+                for obj in info.objects:
+                    if obj.object_id == entry.get("object_id"):
+                        if self._state.add_to_watchlist(sid, obj):
+                            added += 1
+                        break
+        return added
 
     # ---- polling ---------------------------------------------------------
 
