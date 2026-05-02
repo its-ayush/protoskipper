@@ -84,6 +84,7 @@ class DriverWorker(QObject):
     write_committed = Signal(object)  # WriteResult
     write_denied = Signal(object)  # WriteIntent
     frame_captured = Signal(CapturedFrame)
+    audit_row_written = Signal()  # one emission per audit-log row appended
     closed = Signal()
     error_raised = Signal(str, str)  # operation, message
 
@@ -138,6 +139,7 @@ class DriverWorker(QObject):
                 operator=operator,
                 audit_dir=Path(audit_dir),
                 confirm=self._confirm_callback,
+                on_audit_record=self.audit_row_written.emit,
             )
         except Exception as exc:
             _logger.exception("Session open failed")

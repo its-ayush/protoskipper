@@ -39,6 +39,7 @@ class _FakeWorker(QObject):
     write_committed = Signal(object)
     write_denied = Signal(object)
     frame_captured = Signal(CapturedFrame)
+    audit_row_written = Signal()
     closed = Signal()
     error_raised = Signal(str, str)
 
@@ -247,4 +248,106 @@ def test_shutdown_waits_for_all_threads(
     # After shutdown() returns all worker handles must have been removed.
     assert len(manager._workers) == 0, (
         f"Expected 0 workers after shutdown, got {len(manager._workers)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# P0.C.7 — cancel-during-discovery cleans up worker within 1 s
+# ---------------------------------------------------------------------------
+
+
+class _SlowDiscoveryWorker(_FakeWorker):
+    """Variant that blocks in start_discovery until the cancel flag is set."""
+
+    @Slot(str)
+    def start_discovery(self, target: str) -> None:
+        # Poll the cancel flag; emit nothing until cancelled or 10 s pass.
+        import time
+
+        deadline = time.monotonic() + 10.0
+        while not self._cancel_flag.is_set() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        # Emit finished regardless so SessionManager tears down the handle.
+        self.discovery_finished.emit(0)
+
+    def __init__(
+        self,
+        driver: object,
+        session_id: SessionId,
+        confirm_callback: object,
+    ) -> None:
+        super().__init__(driver, session_id, confirm_callback)
+        import threading
+
+        self._cancel_flag = threading.Event()
+
+    @Slot()
+    def cancel(self) -> None:
+        self._cancel_flag.set()
+
+
+def test_cancel_during_discovery_cleans_up_within_1s(
+    qtbot: object,
+    state: ApplicationState,
+    manager: SessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cancel_discovery must remove the worker from _workers within 1 second."""
+    monkeypatch.setattr(
+        "protoskipper.gui.services.session_manager.DriverWorker",
+        _SlowDiscoveryWorker,
+    )
+    manager._drivers["fake"] = _FakeDriver()  # type: ignore[assignment]
+
+    # Start discovery (slow — won't finish on its own for 10 s).
+    did = manager.start_discovery("fake", "127.0.0.0/30")
+    assert did in manager._workers, "Worker should be present immediately after start"
+
+    # Cancel it and wait for discovery_finished to propagate.
+    with qtbot.waitSignal(state.discovery_finished, timeout=1_000):  # type: ignore[union-attr]
+        manager.cancel_discovery(did)
+
+    # Worker must be gone from the active registry.
+    qtbot.waitUntil(  # type: ignore[union-attr]
+        lambda: did not in manager._workers,
+        timeout=1_000,
+    )
+
+
+# ---------------------------------------------------------------------------
+# P0.C.8 — no leaked QThread after shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_shutdown_releases_all_threads(
+    qtbot: object,
+    state: ApplicationState,
+    manager: SessionManager,
+    fake_device: DeviceRef,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After shutdown() both _workers and _stopping must be empty."""
+    monkeypatch.setattr(
+        "protoskipper.gui.services.session_manager.DriverWorker",
+        _FakeWorker,
+    )
+    manager._drivers["fake"] = _FakeDriver()  # type: ignore[assignment]
+
+    for i in range(5):
+        with qtbot.waitSignal(state.session_opened, timeout=500):  # type: ignore[union-attr]
+            manager.open_session(fake_device, SessionProfile.LAB, f"op{i}")
+
+    assert len(manager._workers) == 5
+
+    manager.shutdown()
+
+    # _workers must be empty immediately (shutdown() is synchronous).
+    assert len(manager._workers) == 0, (
+        f"Expected 0 active workers after shutdown, got {len(manager._workers)}"
+    )
+
+    # _stopping must also drain: the finished signal fires on the event loop.
+    qtbot.waitUntil(  # type: ignore[union-attr]
+        lambda: len(manager._stopping) == 0,
+        timeout=1_000,
     )

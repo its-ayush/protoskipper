@@ -147,6 +147,14 @@ class MainWindow(QMainWindow):
         )
         self._audit_label.setStyleSheet("padding: 0 8px; color: #4b5563;")
         toolbar.addWidget(self._audit_label)
+        toolbar.addSeparator()
+        # P0.D.2: Profile chip — reflects the currently-selected session's profile.
+        self._profile_chip = QLabel("No active session", self)
+        self._profile_chip.setObjectName("profile_chip")
+        self._profile_chip.setStyleSheet(
+            "padding: 2px 10px; border-radius: 4px; color: #6b7280; font-weight: bold;"
+        )
+        toolbar.addWidget(self._profile_chip)
         self.addToolBar(toolbar)
 
     def _build_panels(self) -> None:
@@ -202,6 +210,13 @@ class MainWindow(QMainWindow):
         n_drivers = len(load_protocol_drivers())
         self._driver_count_label = QLabel(f"{n_drivers} driver(s)")
         bar.addPermanentWidget(self._driver_count_label)
+
+        # P0.D.1: Live audit row counter.
+        self._audit_row_count = 0
+        self._audit_row_label = QLabel("Audit: 0 rows")
+        self._audit_row_label.setObjectName("audit_row_label")
+        bar.addPermanentWidget(self._audit_row_label)
+
         bar.showMessage("Ready")
 
     def _wire_signals(self) -> None:
@@ -217,6 +232,13 @@ class MainWindow(QMainWindow):
                 6000,
             )
         )
+        # P0.D.1: Increment audit row counter on every logged event.
+        s.audit_row_appended.connect(self._on_audit_row_appended)
+        # P0.D.2: Update profile chip when sessions open/close.
+        s.session_opened.connect(self._on_session_state_changed)
+        s.session_closed.connect(self._on_session_state_changed)
+        # P0.D.3: Keep disconnect button in sync when sessions close.
+        s.session_closed.connect(self._on_session_closed_update_disconnect)
 
     # ---- session management dispatch ------------------------------------
 
@@ -297,11 +319,51 @@ class MainWindow(QMainWindow):
         self._packet_view.set_session(session_id)
         info = self._state.session(SessionId(session_id))
         self._action_disconnect.setEnabled(info is not None and info.is_open)
+        # P0.D.2: Update profile chip to reflect the newly selected session.
+        self._update_profile_chip(info.profile if info else None)
 
     def _on_object_selected_in_tree(self, session_id: str, _ref: ObjectRef) -> None:
         # The tree panel selected a specific object; switch to the
         # object-browser tab so the operator sees it highlighted.
         self._tabs.setCurrentWidget(self._object_browser)
+
+    # ---- P0.D.1 audit row counter ---------------------------------------
+
+    def _on_audit_row_appended(self) -> None:
+        self._audit_row_count += 1
+        self._audit_row_label.setText(f"Audit: {self._audit_row_count} rows")
+
+    # ---- P0.D.2 profile chip --------------------------------------------
+
+    def _update_profile_chip(self, profile: SessionProfile | None) -> None:
+        from protoskipper.gui.theme import active_theme
+
+        theme = active_theme()
+        if profile is None:
+            self._profile_chip.setText("No active session")
+            self._profile_chip.setStyleSheet(
+                "padding: 2px 10px; border-radius: 4px; color: #6b7280; font-weight: bold;"
+            )
+        else:
+            colour = theme.profile_color(profile).name()
+            self._profile_chip.setText(profile.value.upper())
+            self._profile_chip.setStyleSheet(
+                f"padding: 2px 10px; border-radius: 4px; color: {colour}; font-weight: bold;"
+            )
+
+    def _on_session_state_changed(self, *_args: object) -> None:
+        """Update profile chip when any session opens or closes."""
+        sid = self._currently_selected_session()
+        info = self._state.session(SessionId(sid)) if sid else None
+        self._update_profile_chip(info.profile if info and info.is_open else None)
+
+    # ---- P0.D.3 disconnect button state ---------------------------------
+
+    def _on_session_closed_update_disconnect(self, session_id: str) -> None:
+        """Keep Disconnect button in sync when the current session closes."""
+        current = self._currently_selected_session()
+        if current is None or current == session_id:
+            self._action_disconnect.setEnabled(False)
 
     # ---- write flow -----------------------------------------------------
 

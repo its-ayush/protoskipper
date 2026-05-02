@@ -17,6 +17,7 @@ wrapper in production code paths.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -93,18 +94,25 @@ def open_session(
     operator: str,
     audit_dir: Path,
     confirm: ConfirmFn = default_confirm,
+    on_audit_record: Callable[[], None] | None = None,
 ) -> Session:
     """Open an audited session against ``device`` using ``driver``.
 
     A new audit-log file is created in ``audit_dir`` named after the session
     timestamp. The caller is responsible for managing retention; ProtoSkipper
     never deletes audit logs on its own.
+
+    ``on_audit_record`` is an optional zero-argument callback invoked
+    *after* each row is appended to the audit log.  The GUI uses this to
+    keep a live row-count display without polling the SQLite file.
     """
     audit_path = audit_dir / _audit_filename(device, operator)
     audit_log = AuditLog.create(audit_path, operator=operator, profile=profile.value)
 
     def _audit_record(**fields: Any) -> None:
         audit_log.record(**fields)
+        if on_audit_record is not None:
+            on_audit_record()
 
     safety = SafetyContext(
         profile=profile,

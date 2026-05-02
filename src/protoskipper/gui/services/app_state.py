@@ -78,6 +78,7 @@ class ApplicationState(QObject):
     # ---- watchlist / capture / misc --------------------------------------
     watchlist_changed = Signal()
     frame_captured = Signal(CapturedFrame)
+    audit_row_appended = Signal()  # fired once per audit-log row written
     error_raised = Signal(str, str)  # operation, message
     profile_changed = Signal(str, SessionProfile)  # session_id, new_profile
 
@@ -156,6 +157,9 @@ class ApplicationState(QObject):
 
     def record_frame_captured(self, frame: CapturedFrame) -> None:
         self.frame_captured.emit(frame)
+
+    def record_audit_row_appended(self) -> None:
+        self.audit_row_appended.emit()
 
     def record_error(self, operation: str, message: str) -> None:
         self.error_raised.emit(operation, message)

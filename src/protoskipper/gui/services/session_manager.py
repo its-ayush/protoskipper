@@ -217,6 +217,10 @@ class SessionManager(QObject):
             self._state.record_frame_captured,
             Qt.QueuedConnection,
         )
+        worker.audit_row_written.connect(
+            self._state.record_audit_row_appended,
+            Qt.QueuedConnection,
+        )
         worker.closed.connect(
             lambda sid=session_id: self._on_worker_closed(sid),
             Qt.QueuedConnection,
