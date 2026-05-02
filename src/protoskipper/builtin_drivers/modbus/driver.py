@@ -42,6 +42,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from protoskipper.builtin_drivers.modbus.codec import (
+    REGISTER_COUNTS,
+    decode_registers,
+    encode_value,
+)
 from protoskipper.core.driver import (
     Access,
     CaptureSink,
@@ -795,8 +800,15 @@ class _ModbusSession(DriverSession):
 
     # -- read -------------------------------------------------------------
     def read(self, ref: ObjectRef) -> ReadResult:
-        table, address, count = _parse_object_id(ref.object_id)
+        table, address, parsed_count = _parse_object_id(ref.object_id)
         ts = datetime.now(timezone.utc)
+
+        # For fixed-width multi-register types, use the codec's register
+        # count instead of the object_id count so callers don't need to
+        # embed the count in every object_id.
+        dtype = ref.data_type
+        codec_count = REGISTER_COUNTS.get(dtype, 0)
+        count = codec_count if codec_count > 0 else parsed_count
 
         try:
             unit = _u(self._unit)
@@ -834,8 +846,29 @@ class _ModbusSession(DriverSession):
             value = list(resp.bits)[:count]
             value = value[0] if count == 1 else value
         else:
-            value = list(resp.registers)
-            value = value[0] if count == 1 else value
+            raw_regs = list(resp.registers)
+            # Decode multi-register types through the codec.
+            if dtype in REGISTER_COUNTS and REGISTER_COUNTS[dtype] > 1:
+                byte_order = str(ref.metadata.get("byte_order", "big"))
+                word_order = str(ref.metadata.get("word_order", "big"))
+                try:
+                    value = decode_registers(raw_regs, dtype, byte_order, word_order)
+                except Exception as exc:
+                    _logger.warning(
+                        "Codec decode failed for %s (dtype=%s): %s",
+                        ref.object_id,
+                        dtype,
+                        exc,
+                    )
+                    return ReadResult(
+                        object_ref=ref,
+                        value=None,
+                        quality=Quality.BAD,
+                        timestamp=ts,
+                        error=repr(exc),
+                    )
+            else:
+                value = raw_regs[0] if len(raw_regs) == 1 else raw_regs
 
         return ReadResult(
             object_ref=ref,
@@ -856,15 +889,33 @@ class _ModbusSession(DriverSession):
                 f"Modbus writes only target holding registers or coils; got {table!r}"
             )
 
+        dtype = ref.data_type
+        byte_order = str(ref.metadata.get("byte_order", "big"))
+        word_order = str(ref.metadata.get("word_order", "big"))
+
         try:
             if table == "holding":
-                int_value = int(value) & 0xFFFF
-                encoded = int_value.to_bytes(2, "big")
-                description = f"Write holding[{address}] := {int_value} (0x{int_value:04x})"
+                codec_count = REGISTER_COUNTS.get(dtype, 0)
+                if codec_count > 1:
+                    # Multi-register type: encode through the codec.
+                    registers = encode_value(float(value), dtype, byte_order, word_order)
+                    encoded = b"".join(r.to_bytes(2, "big") for r in registers)
+                    description = (
+                        f"Write holding[{address}:{address + codec_count - 1}]"
+                        f" := {value!r} ({dtype})"
+                    )
+                    extra_meta: dict = {"registers": registers}
+                else:
+                    # Single-register (uint16 / int16 / boolean stored in holding).
+                    int_value = int(value) & 0xFFFF
+                    encoded = int_value.to_bytes(2, "big")
+                    description = f"Write holding[{address}] := {int_value} (0x{int_value:04x})"
+                    extra_meta = {}
             else:  # coils
                 bool_value = bool(value)
                 encoded = b"\xff\x00" if bool_value else b"\x00\x00"
                 description = f"Write coil[{address}] := {bool_value}"
+                extra_meta = {}
         except (TypeError, ValueError) as exc:
             raise EncodingError(f"Cannot encode {value!r} for {ref.object_id}: {exc}") from exc
 
@@ -873,7 +924,12 @@ class _ModbusSession(DriverSession):
             requested_value=value,
             encoded_bytes=encoded,
             description=description,
-            metadata={"unit_id": self._unit, "table": table, "address": address},
+            metadata={
+                "unit_id": self._unit,
+                "table": table,
+                "address": address,
+                **extra_meta,
+            },
         )
 
     def commit_write(self, intent: WriteIntent) -> WriteResult:
@@ -889,8 +945,13 @@ class _ModbusSession(DriverSession):
         try:
             unit = _u(self._unit)
             if table == "holding":
-                int_value = int.from_bytes(intent.encoded_bytes, "big")
-                resp = self._client.write_register(address=address, value=int_value, **unit)
+                registers: list[int] | None = intent.metadata.get("registers")
+                if registers is not None and len(registers) > 1:
+                    # Multi-register write (float32, uint32, int32, …)
+                    resp = self._client.write_registers(address=address, values=registers, **unit)
+                else:
+                    int_value = int.from_bytes(intent.encoded_bytes, "big")
+                    resp = self._client.write_register(address=address, value=int_value, **unit)
             else:  # coils
                 bool_value = intent.encoded_bytes == b"\xff\x00"
                 resp = self._client.write_coil(address=address, value=bool_value, **unit)
