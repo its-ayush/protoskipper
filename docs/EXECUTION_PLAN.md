@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 45 / 92 tasks complete (48.9%)**
+> **Overall Progress: 47 / 92 tasks complete (51.1%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -789,13 +789,13 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 
 ## P2.B — Audit-log viewer
 
-### P2.B.1 File → Audit → Verify…
+### ✅ P2.B.1 File → Audit → Verify…
 
 * **Acceptance criteria:**
   * File picker opens; selected file is run through `verify_log`.
   * Result dialog shows OK / FAILED with the exact verification message.
 
-### P2.B.2 File → Audit → View…
+### ✅ P2.B.2 File → Audit → View…
 
 * **Acceptance criteria:**
   * Opens a chronological view of an audit file.
