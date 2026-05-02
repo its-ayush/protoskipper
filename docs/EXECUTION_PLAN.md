@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 43 / 92 tasks complete (46.7%)**
+> **Overall Progress: 44 / 92 tasks complete (47.8%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -770,9 +770,9 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
   * Output passes `pcapng-validate` round-trip.
   * Custom Block (type 0x40000001) carries protocol_id + raw payload.
 
-### P2.A.2 GUI: File → Capture → Start / Stop / Save / Open
+### ✅ P2.A.2 GUI: File → Capture → Start / Stop / Save / Open
 
-* **Files touched:** `src/protoskipper/gui/main_window.py`.
+* **Files touched:** `src/protoskipper/gui/main_window.py`, `src/protoskipper/gui/panels/packet_view.py`, `src/protoskipper/gui/models/packet_log_model.py`, `src/protoskipper/gui/services/app_state.py`, `src/protoskipper/gui/services/session_manager.py`, `src/protoskipper/gui/services/worker.py`, `src/protoskipper/core/capture/__init__.py`.
 * **Acceptance criteria:**
   * Start enables the capture sink on the active session.
   * Stop prompts to save (or discard).
