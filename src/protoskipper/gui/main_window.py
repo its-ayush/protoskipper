@@ -36,6 +36,7 @@ from protoskipper.core.capture.pcapng import read_pcapng
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
 from protoskipper.gui.dialogs import (
+    AuditViewDialog,
     NewConnectionDialog,
     ProbeNetworkDialog,
     ProbeSelection,
@@ -163,12 +164,16 @@ class MainWindow(QMainWindow):
         capture_menu.addSeparator()
         capture_menu.addAction(self._action_capture_open)
 
-        # Audit submenu (P2.B.1)
+        # Audit submenu (P2.B.1 + P2.B.2)
         self._action_audit_verify = QAction("&Verify Audit Log…", self)
         self._action_audit_verify.triggered.connect(self._on_audit_verify)
 
+        self._action_audit_view = QAction("View Audit Log…", self)
+        self._action_audit_view.triggered.connect(self._on_audit_view)
+
         audit_menu = menu.addMenu("&Audit")
         audit_menu.addAction(self._action_audit_verify)
+        audit_menu.addAction(self._action_audit_view)
 
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self._action_about)
@@ -571,6 +576,23 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Audit Log: VERIFIED", message)
         else:
             QMessageBox.warning(self, "Audit Log: FAILED", message)
+
+    # ---- P2.B.2 audit view ---------------------------------------------
+
+    def _on_audit_view(self) -> None:
+        """Audit → View Audit Log… — opens chronological viewer dialog."""
+        audit_dir = self._audit_dir
+        start_dir = str(audit_dir) if audit_dir else str(Path.home())
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "View Audit Log",
+            start_dir,
+            "SQLite audit logs (*.db *.sqlite *.sqlite3);;All files (*)",
+        )
+        if not path_str:
+            return
+        dlg = AuditViewDialog(Path(path_str), parent=self)
+        dlg.exec()
 
     # ---- error / failure surfaces --------------------------------------
 
