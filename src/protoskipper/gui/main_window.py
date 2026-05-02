@@ -60,6 +60,7 @@ from protoskipper.gui.services import (
     GuiConfirmHandler,
     SessionManager,
 )
+from protoskipper.gui.services.setup_io import Setup, SetupSession, load_setup, save_setup
 from protoskipper.gui.services.types import CapturedFrame as GuiFrame
 from protoskipper.gui.services.types import Direction, SessionId
 from protoskipper.gui.services.write_flow import WriteFlowController
@@ -108,6 +109,7 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_toolbar()
         self._build_panels()
+        self._build_panel_view_actions()  # must follow _build_panels
         self._build_status_bar()
         self._wire_signals()
 
@@ -164,6 +166,24 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._action_close_session)
         file_menu.addAction(self._action_close_all_sessions)
         file_menu.addAction(self._action_disconnect)
+        file_menu.addSeparator()
+
+        self._action_open_setup = QAction(self.tr("Open Setup…"), self)
+        self._action_open_setup.setShortcut("Ctrl+O")
+        self._action_open_setup.setToolTip(
+            "Load a previously saved setup (devices + registers) from a JSON file"
+        )
+        self._action_open_setup.triggered.connect(self._on_open_setup)
+
+        self._action_save_setup = QAction(self.tr("Save Setup…"), self)
+        self._action_save_setup.setShortcut("Ctrl+S")
+        self._action_save_setup.setToolTip(
+            "Save the current devices and register lists to a JSON file for later reuse"
+        )
+        self._action_save_setup.triggered.connect(self._on_save_setup)
+
+        file_menu.addAction(self._action_open_setup)
+        file_menu.addAction(self._action_save_setup)
         file_menu.addSeparator()
         file_menu.addAction(self._action_quit)
 
@@ -328,6 +348,7 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_left)
+        self._dock_devices = dock_left
 
         # ---- center: tabs (object browser / packet view) ----
         self._tabs = QTabWidget(self)
@@ -335,6 +356,7 @@ class MainWindow(QMainWindow):
         self._object_browser = ObjectBrowserPanel(self._state, self._session_manager, self)
         self._object_browser.write_requested.connect(self._open_write_dialog)
         self._object_browser.add_to_watchlist_requested.connect(self._add_to_watchlist)
+        self._object_browser.add_unit_requested.connect(self._clone_unit_session)
         self._packet_view = PacketViewPanel(self._state, self)
         self._tabs.addTab(self._object_browser, "Object Browser")
         self._tabs.addTab(self._packet_view, "Packet View")
@@ -349,6 +371,7 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_top)
+        self._dock_watchlist = dock_right_top
 
         self._session_status = SessionStatusPanel(self._state, self)
         dock_right_bottom = QDockWidget("Sessions", self)
@@ -358,6 +381,37 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_bottom)
+        self._dock_sessions = dock_right_bottom
+
+    def _build_panel_view_actions(self) -> None:
+        """Add dock-panel toggle actions to View → Panels so closed panels can be reopened."""
+        view_menu = self.menuBar().findChild(type(self.menuBar().actions()[0].menu()), "")
+        # Locate the View menu by title rather than index (robust to menu reordering).
+        view_menu = None
+        for action in self.menuBar().actions():
+            if action.text().replace("&", "") == "View":
+                view_menu = action.menu()
+                break
+        if view_menu is None:
+            return
+
+        panels_submenu = view_menu.addMenu(self.tr("&Panels"))
+        panels_submenu.addAction(self._dock_devices.toggleViewAction())
+        panels_submenu.addAction(self._dock_watchlist.toggleViewAction())
+        panels_submenu.addAction(self._dock_sessions.toggleViewAction())
+        view_menu.addSeparator()
+        restore_action = view_menu.addAction(self.tr("Restore default layout"))
+        restore_action.triggered.connect(self._restore_default_layout)
+
+    def _restore_default_layout(self) -> None:
+        """Show all panels and reset dock positions to defaults."""
+        self._dock_devices.setVisible(True)
+        self._dock_watchlist.setVisible(True)
+        self._dock_sessions.setVisible(True)
+        # Re-add to their default sides (already added; just ensure visible).
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_devices)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_watchlist)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_sessions)
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -944,6 +998,87 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    # ---- setup save / load ----------------------------------------------
+
+    def _on_save_setup(self) -> None:
+        """File → Save Setup… — persist current sessions + registers to JSON."""
+        sessions = [info for info in self._state.sessions() if info.is_open or info.objects]
+        if not sessions:
+            QMessageBox.information(
+                self,
+                self.tr("Nothing to save"),
+                self.tr("No open sessions or registers found. Connect to a device first."),
+            )
+            return
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        Path(default_dir).mkdir(parents=True, exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Save Setup"),
+            default_dir,
+            "ProtoSkipper setups (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if not path.suffix:
+            path = path.with_suffix(".json")
+        setup_sessions = [
+            SetupSession(
+                device=info.device,
+                profile=info.profile,
+                operator=info.operator,
+                objects=list(info.objects),
+            )
+            for info in sessions
+        ]
+        try:
+            save_setup(Setup(setup_sessions), path)
+        except Exception as exc:
+            QMessageBox.critical(self, self.tr("Save failed"), str(exc))
+            return
+        self.statusBar().showMessage(self.tr("Setup saved to {name}").format(name=path.name), 5000)
+
+    def _on_open_setup(self) -> None:
+        """File → Open Setup… — load a saved setup and open its sessions."""
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Open Setup"),
+            default_dir,
+            "ProtoSkipper setups (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        setup = load_setup(path)
+        if not setup.sessions:
+            QMessageBox.warning(
+                self,
+                self.tr("Empty or invalid setup"),
+                self.tr("No valid sessions found in {name}.").format(name=path.name),
+            )
+            return
+        for entry in setup.sessions:
+            sid = self._session_manager.open_session(entry.device, entry.profile, entry.operator)
+            if entry.objects:
+                # Patch the device reference on each restored ObjectRef to point
+                # to the DeviceRef we actually passed to open_session.
+                import dataclasses
+
+                patched = [dataclasses.replace(o, device=entry.device) for o in entry.objects]
+                self._state.record_objects_enumerated(sid, patched)
+        self.statusBar().showMessage(
+            self.tr("Loaded {n} session(s) from {name}").format(
+                n=len(setup.sessions), name=path.name
+            ),
+            5000,
+        )
+
+    def _has_unsaved_objects(self) -> bool:
+        """True if any session has registers defined (worth saving)."""
+        return any(bool(info.objects) for info in self._state.sessions())
+
     # ---- persistence + close -------------------------------------------
 
     def _restore_settings(self) -> None:
@@ -961,6 +1096,25 @@ class MainWindow(QMainWindow):
         settings.setValue("MainWindow/state", self.saveState())
 
     def closeEvent(self, event) -> None:
+        # Prompt to save setup if there are registers defined.
+        if self._has_unsaved_objects():
+            reply = QMessageBox.question(
+                self,
+                self.tr("Save setup before closing?"),
+                self.tr(
+                    "You have registers defined in one or more sessions.\n"
+                    "Save the setup so you can restore it next time?"
+                ),
+                QMessageBox.StandardButton.Save
+                | QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if reply == QMessageBox.StandardButton.Cancel:
+                event.ignore()
+                return
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_save_setup()
         self._save_settings()
         try:
             self._session_manager.shutdown()

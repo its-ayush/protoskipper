@@ -52,6 +52,8 @@ class SessionManager(QObject):
         self._audit_dir = audit_dir
         self._workers: dict[SessionId, _WorkerHandle] = {}
         self._drivers: dict[str, ProtocolDriver] = {}
+        # Per-register poll timers: (session_id, object_id) → QTimer.
+        self._poll_timers: dict[tuple[SessionId, str], QTimer] = {}
         # Handles whose threads have been asked to stop but have not yet exited.
         # Holding them here prevents premature GC of the C++ QThread object while
         # the thread is still running (PySide6 uses weak refs in signal connections).
@@ -383,6 +385,44 @@ class SessionManager(QObject):
             return
         self._state.record_objects_enumerated(session_id, [])
 
+    # ---- polling ---------------------------------------------------------
+
+    def set_poll_interval(self, session_id: SessionId, ref: ObjectRef, interval_ms: int) -> None:
+        """Start or stop continuous polling of *ref* at *interval_ms* ms.
+
+        Pass *interval_ms* = 0 to stop polling that register.
+        Each ``(session_id, object_id)`` pair has at most one timer.
+        """
+        key = (session_id, ref.object_id)
+        existing: QTimer | None = self._poll_timers.get(key)
+        if existing is not None:
+            existing.stop()
+            existing.deleteLater()
+            del self._poll_timers[key]
+
+        if interval_ms <= 0:
+            return  # 0 = off
+
+        timer = QTimer(self)
+        timer.setInterval(interval_ms)
+        timer.timeout.connect(lambda: self.read(session_id, ref))
+        timer.start()
+        self._poll_timers[key] = timer
+
+    def poll_interval(self, session_id: SessionId, ref: ObjectRef) -> int:
+        """Return the active poll interval in ms for *ref*, or 0 if not polling."""
+        key = (session_id, ref.object_id)
+        t = self._poll_timers.get(key)
+        return t.interval() if t is not None else 0
+
+    def stop_all_polling(self, session_id: SessionId) -> None:
+        """Stop all poll timers for *session_id* (called on session close)."""
+        to_remove = [k for k in self._poll_timers if k[0] == session_id]
+        for key in to_remove:
+            self._poll_timers[key].stop()
+            self._poll_timers[key].deleteLater()
+            del self._poll_timers[key]
+
     def save_capture(self, session_id: SessionId, path: Path) -> None:
         """Flush the session's ring-buffer capture to a pcapng file at *path*.
 
@@ -426,6 +466,7 @@ class SessionManager(QObject):
 
     def _on_worker_closed(self, session_id: SessionId) -> None:
         """Called when a session worker's closed signal fires (any thread)."""
+        self.stop_all_polling(session_id)
         self._state.record_session_closed(session_id)
         handle = self._workers.get(session_id)
         if handle is not None:

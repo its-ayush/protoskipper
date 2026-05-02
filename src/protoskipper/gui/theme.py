@@ -144,7 +144,27 @@ def apply_app_theme(name: str) -> None:
     else:
         set_active_theme(LIGHT_THEME)
         app.setStyle("Fusion")
-        app.setPalette(QPalette())  # reset to Qt default
+        # Explicitly build a light palette so the choice is not overridden
+        # by the OS dark-mode system palette.
+        palette = QPalette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#f5f5f5"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#1f2937"))
+        palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#f3f4f6"))
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#1f2937"))
+        palette.setColor(QPalette.ColorRole.Text, QColor("#1f2937"))
+        palette.setColor(QPalette.ColorRole.Button, QColor("#e5e7eb"))
+        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#1f2937"))
+        palette.setColor(QPalette.ColorRole.BrightText, QColor("#b91c1c"))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor("#3b82f6"))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.Link, QColor("#2563eb"))
+        palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#9ca3af"))
+        palette.setColor(
+            QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#9ca3af")
+        )
+        app.setPalette(palette)
 
 
 # ---------------------------------------------------------------------------

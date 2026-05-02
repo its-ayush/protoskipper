@@ -11,7 +11,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QComboBox,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMenu,
     QPushButton,
@@ -24,7 +26,11 @@ from PySide6.QtWidgets import (
 
 from protoskipper.core.driver import ObjectRef
 from protoskipper.gui.dialogs.add_register import AddRegisterDialog
-from protoskipper.gui.models.object_browser_model import ObjectBrowserModel
+from protoskipper.gui.models.object_browser_model import (
+    POLL_LABELS,
+    POLL_MS,
+    ObjectBrowserModel,
+)
 from protoskipper.gui.services.app_state import ApplicationState
 from protoskipper.gui.services.session_manager import SessionManager
 from protoskipper.gui.services.types import SessionId
@@ -34,7 +40,8 @@ class ObjectBrowserPanel(QWidget):
     """Table of objects for the currently focused session."""
 
     write_requested = Signal(str, object)  # SessionId, ObjectRef
-    add_to_watchlist_requested = Signal(str, object)  # SessionId, ObjectRef
+    add_to_watchlist_requested = Signal(str, object)  # SessionId, ObjectRef  (kept for compat)
+    add_unit_requested = Signal(str, int)  # SessionId, new_unit_id
 
     def __init__(
         self,
@@ -82,35 +89,55 @@ class ObjectBrowserPanel(QWidget):
         self._add_register_button.setToolTip(
             "Define a Modbus register address, type, and encoding to add to this session"
         )
+        self._add_unit_button = QPushButton("Add Unit ID…", self)
+        self._add_unit_button.setAccessibleName(
+            "Open a new session with a different unit ID on the same gateway"
+        )
+        self._add_unit_button.setToolTip(
+            "Open a new session to the same TCP/RTU gateway with a different Modbus unit ID"
+        )
         self._read_button = QPushButton("Read selected", self)
         self._read_button.setAccessibleName("Read selected object")
-        self._read_button.setToolTip("Read the selected register  [F5]")
+        self._read_button.setToolTip("Read the selected register once  [F5]")
         self._read_all_button = QPushButton("Read all", self)
-        self._read_all_button.setAccessibleName("Read all objects")
-        self._read_all_button.setToolTip("Read all registers  [Shift+F5]")
+        self._read_all_button.setAccessibleName("Read all objects once")
+        self._read_all_button.setToolTip("Read every register once  [Shift+F5]")
         self._write_button = QPushButton("Write…", self)
         self._write_button.setAccessibleName("Write to selected object")
-        self._watch_button = QPushButton("Add to Watchlist", self)
-        self._watch_button.setAccessibleName("Add selected object to watchlist")
         self._remove_button = QPushButton("Remove", self)
         self._remove_button.setAccessibleName("Remove selected register from this session")
         self._remove_button.setToolTip("Remove the selected register from this session")
+
+        # Poll-All combobox: sets the same polling interval on every register.
+        self._poll_all_combo = QComboBox(self)
+        self._poll_all_combo.addItem("Poll all: Off")
+        for _poll_label in POLL_LABELS[1:]:  # skip "Off"
+            self._poll_all_combo.addItem(f"Poll all: {_poll_label}")
+        self._poll_all_combo.setToolTip(
+            "Continuously poll all registers at this interval. "
+            "You can also set a per-register interval via right-click → Set Poll Interval."
+        )
+        self._poll_all_combo.setAccessibleName("Poll all registers at selected interval")
+
         for btn in (
             self._add_register_button,
+            self._add_unit_button,
             self._read_button,
             self._read_all_button,
             self._write_button,
-            self._watch_button,
             self._remove_button,
         ):
             self._toolbar.addWidget(btn)
+        self._toolbar.addSeparator()
+        self._toolbar.addWidget(self._poll_all_combo)
 
         self._add_register_button.clicked.connect(self._on_add_register_clicked)
+        self._add_unit_button.clicked.connect(self._on_add_unit_clicked)
         self._read_button.clicked.connect(self._on_read_clicked)
         self._read_all_button.clicked.connect(self._on_read_all_clicked)
         self._write_button.clicked.connect(self._on_write_clicked)
-        self._watch_button.clicked.connect(self._on_watch_clicked)
         self._remove_button.clicked.connect(self._on_remove_clicked)
+        self._poll_all_combo.currentIndexChanged.connect(self._on_poll_all_changed)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -175,16 +202,16 @@ class ObjectBrowserPanel(QWidget):
         is_writable = obj is not None and obj.access.value != "ro"
 
         self._add_register_button.setEnabled(is_open and not self._replay_mode)
+        self._add_unit_button.setEnabled(is_open and not self._replay_mode)
         self._read_all_button.setEnabled(is_open and not self._replay_mode)
         self._read_button.setEnabled(is_open and has_selection and not self._replay_mode)
         self._write_button.setEnabled(
             is_open and has_selection and is_writable and not self._replay_mode
         )
-        self._watch_button.setEnabled(has_selection and not self._replay_mode)
         self._remove_button.setEnabled(is_open and has_selection and not self._replay_mode)
+        self._poll_all_combo.setEnabled(is_open and not self._replay_mode)
         _tooltip = "Replay mode — writes are disabled" if self._replay_mode else ""
-        self._write_button.setToolTip(_tooltip)
-        self._watch_button.setToolTip(_tooltip)
+        self._write_button.setToolTip(_tooltip or "Write a value to the selected register")
 
     def _update_stack(self, *_args) -> None:
         """Switch between the table and the empty-state placeholder."""
@@ -220,6 +247,23 @@ class ObjectBrowserPanel(QWidget):
         ref = dialog.object_ref()
         self._session_manager.add_object(self._session_id, ref)
 
+    def _on_add_unit_clicked(self) -> None:
+        if self._session_id is None:
+            return
+        info = self._state.session(self._session_id)
+        if info is None or not info.is_open:
+            return
+        unit_id, ok = QInputDialog.getInt(
+            self,
+            "Add Unit ID",
+            "Enter the Modbus unit ID (slave address) to open on the same gateway (1-247):",
+            value=1,
+            min=1,
+            max=247,
+        )
+        if ok:
+            self.add_unit_requested.emit(self._session_id, unit_id)
+
     def _on_remove_clicked(self) -> None:
         obj = self._selected_object()
         if obj is None or self._session_id is None:
@@ -233,12 +277,59 @@ class ObjectBrowserPanel(QWidget):
         info = self._state.session(self._session_id)
         is_open = info.is_open if info else False
         menu = QMenu(self._view)
+
         if is_open and not self._replay_mode:
+            read_once_action = QAction("Read once  (F5)", self)
+            read_once_action.triggered.connect(self._on_read_clicked)
+            menu.addAction(read_once_action)
+
+            poll_menu = menu.addMenu("Set poll interval")
+            current_ms = self._session_manager.poll_interval(self._session_id, obj)
+            for label in POLL_LABELS:
+                ms = POLL_MS[label]
+                action = QAction(label, self)
+                action.setCheckable(True)
+                action.setChecked(current_ms == ms)
+                action.triggered.connect(
+                    lambda _checked=False, _obj=obj, _label=label, _ms=ms: self._set_poll(
+                        _obj, _label, _ms
+                    )
+                )
+                poll_menu.addAction(action)
+
+            menu.addSeparator()
+
+            if obj.access.value != "ro":
+                write_action = QAction("Write…", self)
+                write_action.triggered.connect(self._on_write_clicked)
+                menu.addAction(write_action)
+
+            menu.addSeparator()
             remove_action = QAction("Remove register", self)
             remove_action.triggered.connect(self._on_remove_clicked)
             menu.addAction(remove_action)
+
         if menu.actions():
             menu.exec(self._view.viewport().mapToGlobal(point))
+
+    def _set_poll(self, obj: ObjectRef, label: str, interval_ms: int) -> None:
+        if self._session_id is None:
+            return
+        self._session_manager.set_poll_interval(self._session_id, obj, interval_ms)
+        self._model.set_poll_label(obj.object_id, label)
+
+    def _on_poll_all_changed(self, combo_index: int) -> None:
+        if self._session_id is None:
+            return
+        info = self._state.session(self._session_id)
+        if info is None or not info.is_open:
+            return
+        # combo_index 0 = "Poll all: Off" → POLL_LABELS[0] = "Off"
+        label = POLL_LABELS[combo_index]
+        interval_ms = POLL_MS[label]
+        for obj in info.objects:
+            self._session_manager.set_poll_interval(self._session_id, obj, interval_ms)
+            self._model.set_poll_label(obj.object_id, label)
 
     def _on_read_clicked(self) -> None:
         obj = self._selected_object()
@@ -260,9 +351,3 @@ class ObjectBrowserPanel(QWidget):
         if obj is None or self._session_id is None:
             return
         self.write_requested.emit(self._session_id, obj)
-
-    def _on_watch_clicked(self) -> None:
-        obj = self._selected_object()
-        if obj is None or self._session_id is None:
-            return
-        self.add_to_watchlist_requested.emit(self._session_id, obj)
