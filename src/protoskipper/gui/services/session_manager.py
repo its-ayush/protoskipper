@@ -274,6 +274,40 @@ class SessionManager(QObject):
         _w, _i = handle.worker, intent
         QTimer.singleShot(0, _w, lambda: _w.commit_write(_i))
 
+    def import_register_map(self, session_id: SessionId, csv_path: Path) -> None:
+        """Load a CSV register map and inject its objects into *session_id*.
+
+        The CSV is parsed on the calling thread (always the UI thread) so any
+        :class:`~protoskipper.core.errors.EncodingError` surfaces synchronously.
+        The parsed :class:`~protoskipper.core.driver.ObjectRef` list is then
+        routed through :class:`ApplicationState` exactly as if the driver had
+        enumerated them, so every connected panel updates automatically.
+
+        Parameters
+        ----------
+        session_id:
+            The session whose object browser should be repopulated.
+        csv_path:
+            Path to the CSV register-map file.
+
+        Raises
+        ------
+        EncodingError
+            If the CSV is structurally invalid (missing sentinel, missing
+            required columns, unreadable file).  Per-row problems are
+            non-fatal and only produce log warnings.
+        KeyError
+            If *session_id* is not an active session.
+        """
+        info = self._state.session(session_id)
+        if info is None:
+            raise KeyError(f"No session {session_id!r}")
+
+        from protoskipper.builtin_drivers.modbus.regmap import load_csv
+
+        objects = load_csv(csv_path, device=info.device)
+        self._state.record_objects_enumerated(session_id, objects)
+
     # ---- internal --------------------------------------------------------
 
     def _require(self, session_id: SessionId) -> _WorkerHandle:

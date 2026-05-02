@@ -9,17 +9,22 @@ filters by the selected session, etc.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QFileDialog,
     QHeaderView,
     QMenu,
+    QMessageBox,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
 from protoskipper.core.driver import ObjectRef
+from protoskipper.core.errors import EncodingError
 from protoskipper.gui.models.device_tree_model import (
     KIND_DEVICE,
     KIND_OBJECT,
@@ -112,6 +117,15 @@ class DeviceTreePanel(QWidget):
             disconnect_action.setEnabled(payload.is_open)
             menu.addAction(disconnect_action)
 
+            import_action = QAction("Import register map…", self)
+            import_action.setEnabled(payload.is_open)
+            import_action.triggered.connect(
+                lambda _checked=False, sid=payload.session_id: self._import_register_map(
+                    SessionId(sid)
+                )
+            )
+            menu.addAction(import_action)
+
         elif kind == KIND_OBJECT and isinstance(payload, ObjectRef):
             session_info = self._find_session_for_object(index)
             if session_info is not None:
@@ -148,3 +162,32 @@ class DeviceTreePanel(QWidget):
 
         if menu.actions():
             menu.exec(self._view.viewport().mapToGlobal(point))
+
+    # ---- register-map import ---------------------------------------------
+
+    def _import_register_map(self, session_id: SessionId) -> None:
+        """Open a file dialog and import a CSV register map into *session_id*."""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Modbus register map",
+            "",
+            "CSV register maps (*.csv);;All files (*)",
+        )
+        if not path_str:
+            return  # user cancelled
+
+        csv_path = Path(path_str)
+        try:
+            self._session_manager.import_register_map(session_id, csv_path)
+        except EncodingError as exc:
+            QMessageBox.critical(
+                self,
+                "Import failed",
+                f"Could not import {csv_path.name}:\n\n{exc}",
+            )
+        except KeyError as exc:
+            QMessageBox.warning(
+                self,
+                "Session not found",
+                f"Session is no longer active: {exc}",
+            )
