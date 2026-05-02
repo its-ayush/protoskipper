@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 13 / 92 tasks complete (14.1%)**
+> **Overall Progress: 17 / 92 tasks complete (18.5%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -172,7 +172,7 @@ connect → read → write loop without a defect.
   * `test_plugin_loader_first_wins_on_duplicate`
   * `test_plugin_loader_reload_picks_up_new_plugins`
 
-### P0.B.2 Unit tests for `SessionManager` (mocked)
+### ✅ P0.B.2 Unit tests for `SessionManager` (mocked)
 
 * **Goal:** `SessionManager`'s threading, signal-routing, and cleanup
   guarantees are tested without a real driver or QApplication being shown.
@@ -197,7 +197,7 @@ connect → read → write loop without a defect.
   * `test_cancel_discovery_flips_atomic_flag`
   * `test_shutdown_waits_for_all_threads`
 
-### P0.B.3 Unit tests for `ApplicationState`
+### ✅ P0.B.3 Unit tests for `ApplicationState`
 
 * **Goal:** Every public mutator emits its corresponding signal exactly
   once and updates internal state consistently.
@@ -211,7 +211,7 @@ connect → read → write loop without a defect.
 * **Tests required:** ≥ 12 cases, one per public mutator plus duplicate /
   unknown-session edge cases.
 
-### P0.B.4 Unit tests for `GuiConfirmHandler` timeout
+### ✅ P0.B.4 Unit tests for `GuiConfirmHandler` timeout
 
 * **Goal:** The 300-second confirmation timeout is honoured and produces a
   deny.
@@ -228,7 +228,7 @@ connect → read → write loop without a defect.
   * `test_confirm_handler_times_out_to_deny`
   * `test_confirm_handler_normal_path_returns_dialog_answer`
 
-### P0.B.5 Unit tests for Qt models
+### ✅ P0.B.5 Unit tests for Qt models
 
 * **Goal:** Each `QAbstractItemModel` / `QAbstractTableModel` is tested
   using a real `QApplication` but no real driver.
