@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 41 / 92 tasks complete (44.6%)**
+> **Overall Progress: 43 / 92 tasks complete (46.7%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -719,7 +719,7 @@ type support".
 
 ## P1.F — Audit + capture completeness for Modbus
 
-### P1.F.1 Read events optionally audited
+### ✅ P1.F.1 Read events optionally audited
 
 * **Goal:** A SafetyContext flag enables audit logging of reads (off by
   default to avoid file bloat). Flag is per session, set at connect.
@@ -729,7 +729,7 @@ type support".
   * `audit_reads=True`: every read appears in the chain.
   * `verify_log` clean either way.
 
-### P1.F.2 Capture sink writes to in-memory buffer + flushable to file
+### ✅ P1.F.2 Capture sink writes to in-memory buffer + flushable to file
 
 * **Goal:** Captured frames live in a bounded ring buffer (10k frames
   default) and can be flushed to a pcapng file on demand. (pcapng full
