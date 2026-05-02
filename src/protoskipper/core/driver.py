@@ -379,6 +379,17 @@ class DriverSession(ABC):
     def close(self) -> None:
         """Release transport resources."""
 
+    def abort(self) -> None:  # noqa: B027
+        """Best-effort immediate abort of any in-flight I/O.
+
+        Called by the worker's cancel path when the operator interrupts a
+        long-running operation.  The default is a no-op; drivers that control
+        a transport socket should override to close or interrupt it so that
+        the blocked thread is unblocked promptly (within ~1 s).
+
+        The session should not be used after this is called.
+        """
+
     # Context-manager sugar so callers can write ``with driver.connect(...) as s:``
     def __enter__(self) -> DriverSession:
         return self

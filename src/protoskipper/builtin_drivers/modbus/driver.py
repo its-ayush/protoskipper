@@ -394,7 +394,8 @@ class ModbusTcpDriver(ProtocolDriver):
 
     def connect(self, device: DeviceRef, safety: SafetyContext) -> DriverSession:
         host, port, unit = _parse_tcp_address(device.address)
-        client = _make_capturing_tcp_client(host=host, port=port, timeout=3.0)
+        timeout = float(device.metadata.get("timeout", 3.0))
+        client = _make_capturing_tcp_client(host=host, port=port, timeout=timeout)
         if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open Modbus TCP socket to {host}:{port}")
         return _ModbusSession(client=client, unit=unit, device=device, safety=safety)
@@ -620,13 +621,14 @@ class ModbusRtuDriver(ProtocolDriver):
 
     def connect(self, device: DeviceRef, safety: SafetyContext) -> DriverSession:
         cfg = parse_rtu_address(device.address)
+        timeout = float(device.metadata.get("timeout", 1.0))
         client = _make_capturing_serial_client(
             port=cfg.port,
             baudrate=cfg.baudrate,
             parity=cfg.parity,
             stopbits=cfg.stopbits,
             bytesize=cfg.bytesize,
-            timeout=1.0,
+            timeout=timeout,
         )
         if not client.connect():  # type: ignore[union-attr]
             raise ConnectionFailure(f"Could not open serial port {cfg.port}")
@@ -1220,6 +1222,18 @@ class _ModbusSession(DriverSession):
             self._client.close()
         except Exception:  # pragma: no cover - defensive
             _logger.exception("Error closing Modbus client; ignoring")
+
+    def abort(self) -> None:
+        """Close the underlying transport immediately.
+
+        Called from the worker's cancel() path to unblock a hung I/O call.
+        The session should not be used after this; it will be closed normally
+        by the worker teardown path.
+        """
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self._client.close()
 
 
 # ---------------------------------------------------------------------------

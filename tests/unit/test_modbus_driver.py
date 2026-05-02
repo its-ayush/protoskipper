@@ -362,3 +362,90 @@ def test_read_many_bulk_error_propagates_to_all_in_span() -> None:
 
     assert all(r.quality == Quality.BAD for r in results)
     assert client.read_holding_registers.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# P1.E.1 — timeout from metadata and abort()
+# ---------------------------------------------------------------------------
+
+
+def test_tcp_connect_uses_timeout_from_metadata() -> None:
+    """ModbusTcpDriver.connect() must pass device.metadata['timeout'] to the client."""
+    from unittest.mock import MagicMock, patch
+
+    from protoskipper.builtin_drivers.modbus.driver import ModbusTcpDriver
+    from protoskipper.core.driver import DeviceRef
+
+    drv = ModbusTcpDriver()
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address="127.0.0.1:502/unit=1",
+        label="test",
+        metadata={"timeout": 7.5},
+    )
+
+    captured_timeout: list[float] = []
+
+    def fake_make_tcp(host: str, port: int, timeout: float) -> MagicMock:
+        captured_timeout.append(timeout)
+        fake_client = MagicMock()
+        fake_client.connect.return_value = True
+        return fake_client
+
+    with patch(
+        "protoskipper.builtin_drivers.modbus.driver._make_capturing_tcp_client",
+        side_effect=fake_make_tcp,
+    ):
+        drv.connect(device, safety=MagicMock())
+
+    assert captured_timeout == [7.5], f"Expected timeout=7.5, got {captured_timeout}"
+
+
+def test_tcp_connect_uses_default_timeout_when_not_in_metadata() -> None:
+    """Default timeout is 3.0 s when device.metadata has no 'timeout' key."""
+    from unittest.mock import MagicMock, patch
+
+    from protoskipper.builtin_drivers.modbus.driver import ModbusTcpDriver
+    from protoskipper.core.driver import DeviceRef
+
+    drv = ModbusTcpDriver()
+    device = DeviceRef(
+        protocol="modbus.tcp",
+        address="127.0.0.1:502/unit=1",
+        label="test",
+        metadata={},
+    )
+
+    captured_timeout: list[float] = []
+
+    def fake_make_tcp(host: str, port: int, timeout: float) -> MagicMock:
+        captured_timeout.append(timeout)
+        fake_client = MagicMock()
+        fake_client.connect.return_value = True
+        return fake_client
+
+    with patch(
+        "protoskipper.builtin_drivers.modbus.driver._make_capturing_tcp_client",
+        side_effect=fake_make_tcp,
+    ):
+        drv.connect(device, safety=MagicMock())
+
+    assert captured_timeout == [3.0]
+
+
+def test_session_abort_closes_client() -> None:
+    """_ModbusSession.abort() must call client.close() to unblock hung I/O."""
+    from unittest.mock import MagicMock
+
+    session = _make_session(MagicMock())
+    session.abort()  # type: ignore[union-attr]
+    session._client.close.assert_called_once()  # type: ignore[union-attr]
+
+
+def test_driver_session_abc_abort_is_noop_by_default() -> None:
+    """The DriverSession.abort() default must not raise."""
+    from protoskipper.core.driver import DriverSession
+
+    # Verify the method exists and is callable (it's a concrete no-op default).
+    assert hasattr(DriverSession, "abort")
+    assert callable(DriverSession.abort)

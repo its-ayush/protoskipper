@@ -226,8 +226,19 @@ class DriverWorker(QObject):
 
     @Slot()
     def cancel(self) -> None:
-        """Cooperative cancellation flag for long-running slots."""
+        """Cooperative cancellation: flip the flag and abort in-flight I/O.
+
+        Setting ``_cancel`` unblocks the discovery loop at its next iteration.
+        Calling ``abort()`` on the driver session closes the transport socket
+        so that any blocking send/recv call returns immediately (within the
+        OS socket-close latency, typically < 1 s).
+        """
         self._cancel.set()
+        if self._session is not None:
+            try:
+                self._session.driver_session.abort()
+            except Exception:
+                _logger.debug("abort() raised on driver session; ignoring")
 
     @Slot()
     def close(self) -> None:
