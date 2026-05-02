@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 29 / 92 tasks complete (31.5%)**
+> **Overall Progress: 33 / 92 tasks complete (35.9%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -565,7 +565,7 @@ type support".
 
 ## P1.B — Full data-type support
 
-### P1.B.1 32-bit register pairs (uint32, int32, float32)
+### ✅ P1.B.1 32-bit register pairs (uint32, int32, float32)
 
 * **Goal:** Read/write 32-bit values stored as register pairs with
   configurable byte and word order.
@@ -584,7 +584,7 @@ type support".
   * Read of a `float32` register pair returns a Python `float`.
   * Write of a `float32` produces the expected wire bytes.
 
-### P1.B.2 Bit-field types
+### ✅ P1.B.2 Bit-field types
 
 * **Goal:** A register can be split into named single-bit objects.
 * **Files touched:** `src/protoskipper/builtin_drivers/modbus/regmap.py`,
@@ -598,7 +598,7 @@ type support".
   * Writing one bit issues a read-modify-write on the parent register
     inside `commit_write`.
 
-### P1.B.3 String types (ASCII / UTF-16)
+### ✅ P1.B.3 String types (ASCII / UTF-16)
 
 * **Goal:** Reading a contiguous register range as a string returns a
   Python `str`.
@@ -607,7 +607,7 @@ type support".
   * `data_type="ascii"`, `count=10` returns the trimmed ASCII string.
   * `data_type="utf16"` decodes correctly with the configured byte order.
 
-### P1.B.4 Scale + offset on read/write
+### ✅ P1.B.4 Scale + offset on read/write
 
 * **Goal:** Engineering-unit conversions happen in the driver, not the UI.
 * **Acceptance criteria:**
