@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 33 / 92 tasks complete (35.9%)**
+> **Overall Progress: 35 / 92 tasks complete (38.0%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -619,7 +619,7 @@ type support".
 
 ## P1.C — Multi-register batch reads
 
-### P1.C.1 `read_many` honours contiguous-range optimisation
+### ✅ P1.C.1 `read_many` honours contiguous-range optimisation
 
 * **Goal:** `_ModbusSession.read_many(refs)` issues one Modbus request
   per contiguous block, not one per object.
@@ -630,7 +630,7 @@ type support".
   * Test counts pymodbus calls via mock.
   * Result list is in the same order as the input refs.
 
-### P1.C.2 Watchlist polling timer (opt-in)
+### ✅ P1.C.2 Watchlist polling timer (opt-in)
 
 * **Goal:** A polling interval can be set per watchlist; the GUI calls
   `read_many` on the timer.
