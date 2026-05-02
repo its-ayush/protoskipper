@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 17 / 92 tasks complete (18.5%)**
+> **Overall Progress: 25 / 92 tasks complete (27.2%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -247,7 +247,7 @@ connect → read → write loop without a defect.
   * Watchlist model: capped foreground colour change after session close.
   * Packet log model: FIFO eviction after `max_rows` reached.
 
-### P0.B.6 Integration test for full GUI happy path with simulator
+### ✅ P0.B.6 Integration test for full GUI happy path with simulator
 
 * **Goal:** A pytest-qt test launches `MainWindow`, opens a connection to
   the simulator, reads, writes, disconnects, all without a human present.
@@ -365,7 +365,7 @@ connect → read → write loop without a defect.
     commit signal chain works with a fake `SessionManager`.
   * No regression in the manual write smoke test.
 
-### P0.C.5 `ProbeNetworkDialog` "Use selected" path validated
+### ✅ P0.C.5 `ProbeNetworkDialog` "Use selected" path validated
 
 * **Goal:** Selecting a discovered device, clicking "Use selected for
   connection", and seeing the New Connection dialog pre-filled with that
@@ -391,7 +391,7 @@ connect → read → write loop without a defect.
   * No `AttributeError` when displaying the dialogs on PySide6 ≥ 6.6.
   * GUI test that opens `SafetyConfirmDialog` and confirms it renders.
 
-### P0.C.7 Cancel-during-discovery cleans up worker
+### ✅ P0.C.7 Cancel-during-discovery cleans up worker
 
 * **Goal:** Cancelling a probe mid-flight terminates the worker thread
   and removes it from `SessionManager._workers` within 1 second.
@@ -403,7 +403,7 @@ connect → read → write loop without a defect.
 * **Tests required:**
   * `test_cancel_during_discovery_cleans_up_within_1s`
 
-### P0.C.8 No leaked `QThread` after shutdown
+### ✅ P0.C.8 No leaked `QThread` after shutdown
 
 * **Goal:** After `SessionManager.shutdown()`, `QThread.activeThreadCount()`
   returns to its baseline.
@@ -416,7 +416,7 @@ connect → read → write loop without a defect.
 
 ## P0.D — User-visible polish
 
-### P0.D.1 Status bar shows audit row count
+### ✅ P0.D.1 Status bar shows audit row count
 
 * **Goal:** The status bar permanent widget shows "Audit: N rows" and
   updates in real time as the audit log grows.
@@ -436,7 +436,7 @@ connect → read → write loop without a defect.
 * **Tests required:**
   * GUI test asserting the status bar text after each action.
 
-### P0.D.2 Toolbar profile chip uses theme colour
+### ✅ P0.D.2 Toolbar profile chip uses theme colour
 
 * **Goal:** The toolbar shows the active session's profile in its
   corresponding colour. (Currently the toolbar shows only the audit dir.)
@@ -447,7 +447,7 @@ connect → read → write loop without a defect.
     in the matching theme colour.
 * **Tests required:** GUI test reading the chip's stylesheet.
 
-### P0.D.3 Connect/Disconnect buttons reflect state via signals
+### ✅ P0.D.3 Connect/Disconnect buttons reflect state via signals
 
 * **Goal:** The `Disconnect Selected` action enables when a session is
   selected and is open; disables otherwise. No polling.
@@ -457,7 +457,7 @@ connect → read → write loop without a defect.
   * Becomes enabled when device tree selects an open session.
   * Becomes disabled again when the session is closed.
 
-### P0.D.4 Window focus on macOS confirmed
+### ✅ P0.D.4 Window focus on macOS confirmed
 
 * **Goal:** GUI test confirms the window is visible and focused on macOS.
   Already shipped (`raise_()` + `activateWindow()`) but untested.
