@@ -81,6 +81,7 @@ dev-gui = [
     # Must be installed alongside [gui] so PySide6 is present.
     "protoskipper[dev]",
     "pytest-qt==4.5.0",
+    "pytest-timeout>=2.3",
 ]
 
 [project.scripts]

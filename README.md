@@ -3,7 +3,7 @@
 > Open-source SCADA & BMS protocol testing, probing, and commissioning toolkit.
 > Created and maintained by **[DataSailors](https://datasailors.io)** — the team behind the DataSkipper RTU.
 
-[![CI](https://github.com/datasailors/protoskipper/actions/workflows/ci.yml/badge.svg)](https://github.com/datasailors/protoskipper/actions/workflows/ci.yml)
+[![CI](https://github.com/its-ayush/protoskipper/actions/workflows/ci.yml/badge.svg)](https://github.com/its-ayush/protoskipper/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 
