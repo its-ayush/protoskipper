@@ -116,6 +116,8 @@ def apply_app_theme(name: str) -> None:
     stylesheet library.  Uses the "Fusion" style as a cross-platform base
     that honours custom palettes correctly.
     """
+    global _theme_qss
+
     from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QApplication
 
@@ -140,7 +142,11 @@ def apply_app_theme(name: str) -> None:
         palette.setColor(QPalette.ColorRole.Highlight, QColor("#89b4fa"))
         palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#1e1e2e"))
         palette.setColor(QPalette.ColorRole.Link, QColor("#89dceb"))
+        # Mid colour is used by Fusion style for table grid lines.
+        palette.setColor(QPalette.ColorRole.Mid, QColor("#4a4a6e"))
         app.setPalette(palette)
+        _theme_qss = _DARK_GRID_QSS
+        app.setStyleSheet(_theme_qss)
     else:
         set_active_theme(LIGHT_THEME)
         app.setStyle("Fusion")
@@ -165,6 +171,8 @@ def apply_app_theme(name: str) -> None:
             QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#9ca3af")
         )
         app.setPalette(palette)
+        _theme_qss = _LIGHT_GRID_QSS
+        app.setStyleSheet(_theme_qss)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +184,12 @@ QTableView::item { min-height: 18px; padding: 1px 3px; }
 QTreeView::item  { min-height: 18px; padding: 1px 3px; }
 """
 
+_DARK_GRID_QSS = "QTableView { gridline-color: #4a4a6e; }"
+_LIGHT_GRID_QSS = "QTableView { gridline-color: #d1d5db; }"
+
+# Active per-theme QSS (not density-related); set by apply_app_theme.
+_theme_qss: str = _LIGHT_GRID_QSS
+
 
 def apply_density(compact: bool) -> None:
     """Apply compact or comfortable row spacing to the running QApplication."""
@@ -184,4 +198,5 @@ def apply_density(compact: bool) -> None:
     app = QApplication.instance()
     if app is None:
         return
-    app.setStyleSheet(_COMPACT_QSS if compact else "")
+    base = _COMPACT_QSS if compact else ""
+    app.setStyleSheet(base + _theme_qss)

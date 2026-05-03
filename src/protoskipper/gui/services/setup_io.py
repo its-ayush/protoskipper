@@ -200,3 +200,59 @@ def load_setup(path: Path) -> Setup:
         if s is not None:
             sessions.append(s)
     return Setup(sessions)
+
+
+# ---------------------------------------------------------------------------
+# Register-map save/load (device-independent, for reuse across similar devices)
+# ---------------------------------------------------------------------------
+
+_MAP_SCHEMA_VERSION = 1
+
+_SENTINEL_DEVICE = DeviceRef(protocol="unknown", address="__map__")
+
+
+class RegisterMap:
+    """An ordered list of ObjectRef entries without a specific device binding.
+
+    The device field on each ObjectRef is meaningless (placeholder) — it is
+    replaced by the caller when the map is imported into a live session.
+    """
+
+    def __init__(self, protocol: str, objects: list[ObjectRef]) -> None:
+        self.protocol = protocol  # informational; used for compatibility warnings
+        self.objects = objects
+
+
+def save_register_map(rmap: RegisterMap, path: Path) -> None:
+    """Serialise *rmap* to *path* as JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": _MAP_SCHEMA_VERSION,
+        "protocol": rmap.protocol,
+        "registers": [_object_to_dict(o) for o in rmap.objects],
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    _logger.info("Saved register map (%d registers) to %s", len(rmap.objects), path)
+
+
+def load_register_map(path: Path) -> RegisterMap:
+    """Deserialise a register map from *path*.
+
+    Objects have a placeholder device; caller must replace via ``dataclasses.replace``.
+    Returns an empty :class:`RegisterMap` on parse error.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _logger.error("Cannot read register map %s: %s", path, exc)
+        return RegisterMap("unknown", [])
+    if not isinstance(raw, dict):
+        _logger.error("Register map %s: root element is not a JSON object", path)
+        return RegisterMap("unknown", [])
+    protocol = raw.get("protocol", "unknown")
+    objects = [
+        o
+        for entry in (raw.get("registers") or [])
+        if (o := _object_from_dict(entry, _SENTINEL_DEVICE)) is not None
+    ]
+    return RegisterMap(protocol, objects)

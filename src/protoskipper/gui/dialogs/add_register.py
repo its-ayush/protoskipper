@@ -93,9 +93,20 @@ _TABLE_NOTATION_OFFSET = {
 class AddRegisterDialog(QDialog):
     """Form for manually defining a Modbus register to add to a session."""
 
-    def __init__(self, device: DeviceRef, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        device: DeviceRef,
+        *,
+        existing_ids: set[str] | None = None,
+        address_hint: int | None = None,
+        table_hint: str | None = None,
+        dtype_hint: str | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._device = device
+        self._existing_ids: set[str] = existing_ids or set()
+        self._wants_next = False
         self.setWindowTitle(self.tr("Add Register"))
         self.setMinimumWidth(480)
 
@@ -182,6 +193,15 @@ class AddRegisterDialog(QDialog):
         self._offset_spin.setStepType(QDoubleSpinBox.StepType.AdaptiveDecimalStepType)
         self._offset_spin.setAccessibleName(self.tr("Offset added after scale"))
 
+        # ---- Round decimal places (float32/float64 only) -----------------
+        self._round_spin = QSpinBox(self)
+        self._round_spin.setRange(0, 10)
+        self._round_spin.setValue(2)
+        self._round_spin.setSpecialValueText(self.tr("No rounding"))
+        self._round_spin.setAccessibleName(
+            self.tr("Round displayed value to N decimal places (0 = no rounding)")
+        )
+
         # ---- Access ------------------------------------------------------
         self._access_group = QButtonGroup(self)
         self._access_ro = QRadioButton(self.tr("Read-only"), self)
@@ -208,6 +228,14 @@ class AddRegisterDialog(QDialog):
             parent=self,
         )
         self._buttons.button(QDialogButtonBox.StandardButton.Ok).setText(self.tr("Add Register"))
+        self._btn_add_next = self._buttons.addButton(
+            self.tr("Add && Next"),
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        self._btn_add_next.setToolTip(
+            "Add this register and open the dialog again pre-filled with the next address"
+        )
+        self._btn_add_next.clicked.connect(self._on_add_next_clicked)
         self._buttons.accepted.connect(self.accept)
         self._buttons.rejected.connect(self.reject)
 
@@ -223,6 +251,22 @@ class AddRegisterDialog(QDialog):
 
         # Initial state
         self._on_table_changed(0)
+
+        # Apply hints from caller (e.g. "Add next" pre-population).
+        if table_hint:
+            for i in range(self._table_combo.count()):
+                if self._table_combo.itemData(i) == table_hint:
+                    self._table_combo.setCurrentIndex(i)
+                    break
+        if dtype_hint:
+            for i in range(self._dtype_combo.count()):
+                if self._dtype_combo.itemData(i) == dtype_hint:
+                    self._dtype_combo.setCurrentIndex(i)
+                    break
+        if address_hint is not None:
+            self._address_spin.setValue(address_hint)
+        # Reflect the table/dtype hints properly.
+        self._on_table_changed(self._table_combo.currentIndex())
 
     # ---- layout ----------------------------------------------------------
 
@@ -255,6 +299,8 @@ class AddRegisterDialog(QDialog):
         meta_form.addRow(self._scale_row_label, self._scale_spin)
         self._offset_row_label = QLabel(self.tr("Offset:"), self)
         meta_form.addRow(self._offset_row_label, self._offset_spin)
+        self._round_row_label = QLabel(self.tr("Decimal places:"), self)
+        meta_form.addRow(self._round_row_label, self._round_spin)
 
         outer.addWidget(meta_box)
 
@@ -333,6 +379,11 @@ class AddRegisterDialog(QDialog):
         self._offset_row_label.setVisible(show_scale)
         self._offset_spin.setVisible(show_scale)
 
+        # Decimal-places rounding — shown only for floating-point types.
+        is_float = dtype in ("float32", "float64")
+        self._round_row_label.setVisible(is_float)
+        self._round_spin.setVisible(is_float)
+
         self._update_preview()
 
     def _on_count_edited(self) -> None:
@@ -357,6 +408,30 @@ class AddRegisterDialog(QDialog):
         else:
             oid = f"{table}:{address}:{effective_count}"
         self._preview_label.setText(self.tr("object_id = \u201c{oid}\u201d").format(oid=oid))
+
+    def _on_add_next_clicked(self) -> None:
+        self._wants_next = True
+        self.accept()
+
+    # ---- public query API -----------------------------------------------
+
+    @property
+    def wants_next(self) -> bool:
+        """True when the user clicked "Add & Next" instead of "Add Register"."""
+        return self._wants_next
+
+    def current_table(self) -> str:
+        return self._current_table()
+
+    def current_dtype(self) -> str:
+        return self._current_dtype()
+
+    def next_address(self) -> int:
+        """Return the address immediately after the range of this register."""
+        dtype = self._current_dtype()
+        fixed = _REGISTER_COUNTS.get(dtype, 0)
+        count = fixed if fixed > 0 else self._count_spin.value()
+        return self._address_spin.value() + max(1, count)
 
     # ---- public API ------------------------------------------------------
 
@@ -401,6 +476,12 @@ class AddRegisterDialog(QDialog):
             metadata["scale"] = scale
         if offset != 0.0:
             metadata["offset"] = offset
+
+        # Round digits — only for floating-point types; 0 = no rounding.
+        if dtype in ("float32", "float64"):
+            rd = self._round_spin.value()
+            if rd > 0:
+                metadata["round_digits"] = rd
 
         return ObjectRef(
             device=self._device,

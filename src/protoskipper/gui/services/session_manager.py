@@ -161,11 +161,17 @@ class SessionManager(QObject):
         profile: SessionProfile,
         operator: str,
         *,
+        initial_objects: list[ObjectRef] | None = None,
         _reuse_session_id: SessionId | None = None,
     ) -> SessionId:
         """Open a new session. Returns the SessionId immediately; the
         actual open is asynchronous and reported via ApplicationState
         signals (``session_opened`` or ``session_failed``).
+
+        If *initial_objects* is supplied they are injected into the session
+        immediately after the worker's ``enumerate_objects()`` completes
+        (which for Modbus returns nothing), so the object browser is
+        pre-populated when loading a saved setup.
 
         If *_reuse_session_id* is supplied the existing session-tree entry is
         updated in place (used by :meth:`reconnect_session`).
@@ -205,6 +211,24 @@ class SessionManager(QObject):
             ),
             Qt.QueuedConnection,
         )
+        # If initial_objects were supplied (e.g. loading a saved setup), inject
+        # them after the driver's enumerate result is applied.  Both connections
+        # use QueuedConnection so they fire in order on the main-thread event loop.
+        if initial_objects:
+            _injected = [False]
+            _objs: list[ObjectRef] = list(initial_objects)
+
+            def _inject_initial(
+                _objects: list,
+                _sid: SessionId = session_id,
+                _flag: list = _injected,
+                _initial: list[ObjectRef] = _objs,
+            ) -> None:
+                if not _flag[0]:
+                    _flag[0] = True
+                    self._state.record_objects_enumerated(_sid, _initial)
+
+            worker.objects_enumerated.connect(_inject_initial, Qt.QueuedConnection)
         worker.read_completed.connect(
             lambda result, sid=session_id: self._state.record_read_completed(sid, result),
             Qt.QueuedConnection,

@@ -178,7 +178,13 @@ class ObjectBrowserModel(QAbstractTableModel):
             if col == COL_LABEL:
                 return obj.label or ""
             if col == COL_VALUE:
-                return "-" if last is None else str(last.value)
+                if last is None:
+                    return "-"
+                val = last.value
+                rd = obj.metadata.get("round_digits") if obj.metadata else None
+                if rd and isinstance(val, float):
+                    val = round(val, int(rd))
+                return str(val)
             if col == COL_UNIT:
                 return obj.unit or ""
             if col == COL_ADDRESS:

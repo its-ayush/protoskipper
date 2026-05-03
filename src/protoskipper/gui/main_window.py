@@ -1060,14 +1060,12 @@ class MainWindow(QMainWindow):
             )
             return
         for entry in setup.sessions:
-            sid = self._session_manager.open_session(entry.device, entry.profile, entry.operator)
-            if entry.objects:
-                # Patch the device reference on each restored ObjectRef to point
-                # to the DeviceRef we actually passed to open_session.
-                import dataclasses
-
-                patched = [dataclasses.replace(o, device=entry.device) for o in entry.objects]
-                self._state.record_objects_enumerated(sid, patched)
+            self._session_manager.open_session(
+                entry.device,
+                entry.profile,
+                entry.operator,
+                initial_objects=entry.objects if entry.objects else None,
+            )
         self.statusBar().showMessage(
             self.tr("Loaded {n} session(s) from {name}").format(
                 n=len(setup.sessions), name=path.name
