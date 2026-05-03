@@ -219,13 +219,18 @@ def test_reconnect_after_transport_drop(modbus_simulator) -> None:
         real_client = ds._client  # type: ignore[union-attr]
         ds._client = broken_client  # type: ignore[union-attr]
 
-        # Also override the reconnect factory to return the real client.
-        ds._reconnect_factory = lambda: real_client  # type: ignore[union-attr]
+        # Override the factory with one that fails so r2 cannot auto-recover.
+        # This simulates a transport drop where the remote is also unreachable.
+        ds._reconnect_factory = lambda: None  # type: ignore[union-attr]
 
         # 3. The read with the broken client must return BAD quality.
         r2 = ds.read(ref)
         assert r2.quality.value == "bad", f"Expected BAD quality after drop, got {r2.quality}"
         assert r2.error, "Expected a non-empty error message"
+
+        # 4. Wire up a factory that returns the original real client.
+        #    ds._client is still broken_client (reconnect failed in step 3).
+        ds._reconnect_factory = lambda: real_client  # type: ignore[union-attr]
 
         # 4. After the reconnect factory restored the real client, the
         #    next read should return GOOD quality.
@@ -262,38 +267,40 @@ def test_two_concurrent_sessions_independent(modbus_simulator) -> None:
     with (
         tempfile.TemporaryDirectory() as td1,
         tempfile.TemporaryDirectory() as td2,
-        open_session(
-            drv,
-            device,
-            profile=SessionProfile.LAB,
-            operator="session-a@ci",
-            audit_dir=Path(td1),
-            confirm=lambda i, p: True,
-        ) as session_a,
-        open_session(
-            drv,
-            device,
-            profile=SessionProfile.LAB,
-            operator="session-b@ci",
-            audit_dir=Path(td2),
-            confirm=lambda i, p: True,
-        ) as session_b,
     ):
-        ds_a = session_a.driver_session
-        ds_b = session_b.driver_session
+        with (
+            open_session(
+                drv,
+                device,
+                profile=SessionProfile.LAB,
+                operator="session-a@ci",
+                audit_dir=Path(td1),
+                confirm=lambda i, p: True,
+            ) as session_a,
+            open_session(
+                drv,
+                device,
+                profile=SessionProfile.LAB,
+                operator="session-b@ci",
+                audit_dir=Path(td2),
+                confirm=lambda i, p: True,
+            ) as session_b,
+        ):
+            ds_a = session_a.driver_session
+            ds_b = session_b.driver_session
 
-        # Each session must have its own underlying client instance.
-        assert ds_a._client is not ds_b._client  # type: ignore[union-attr]
+            # Each session must have its own underlying client instance.
+            assert ds_a._client is not ds_b._client  # type: ignore[union-attr]
 
-        # Both sessions must be independently readable.
-        ra = ds_a.read(ref)
-        rb = ds_b.read(ref)
-        assert ra.quality.value == "good", f"Session A read failed: {ra.error}"
-        assert rb.quality.value == "good", f"Session B read failed: {rb.error}"
+            # Both sessions must be independently readable.
+            ra = ds_a.read(ref)
+            rb = ds_b.read(ref)
+            assert ra.quality.value == "good", f"Session A read failed: {ra.error}"
+            assert rb.quality.value == "good", f"Session B read failed: {rb.error}"
 
-    # Both sessions are now closed — verify their audit logs are intact.
-    for td in (td1, td2):
-        logs = list(Path(td).glob("*.audit.sqlite"))
-        assert len(logs) == 1
-        ok, msg = verify_log(logs[0])
-        assert ok, msg
+        # Sessions are closed; temp dirs still exist — verify audit logs.
+        for td in (td1, td2):
+            logs = list(Path(td).glob("*.audit.sqlite"))
+            assert len(logs) == 1
+            ok, msg = verify_log(logs[0])
+            assert ok, msg
