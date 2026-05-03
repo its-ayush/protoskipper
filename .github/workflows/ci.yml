@@ -141,3 +141,28 @@ jobs:
           pytest tests/gui/ -q --tb=short -m gui
         env:
           QT_QPA_PLATFORM: xcb
+
+  # ---------------------------------------------------------------------------
+  # Sentinel job — the ONLY check to add to branch protection rules.
+  # It fans in all matrix + downstream jobs so branch protection never needs
+  # to list individual matrix variants (which change when the matrix changes).
+  # ---------------------------------------------------------------------------
+  ci-pass:
+    name: CI pass
+    if: always()
+    needs: [lint, unit, integration, gui]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs passed
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          echo "$results" | python3 -c "
+          import json, sys
+          needs = json.load(sys.stdin)
+          failed = [name for name, job in needs.items() if job['result'] not in ('success', 'skipped')]
+          if failed:
+              print('Failed jobs:', failed)
+              sys.exit(1)
+          print('All jobs passed or were skipped.')
+          "
