@@ -40,6 +40,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-linux:
     name: Build Linux (.deb)
+    continue-on-error: true
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -74,21 +75,10 @@ jobs:
         run: |
           sudo gem install fpm --quiet
           VERSION=${GITHUB_REF_NAME#v}
-          fpm \
-            -s dir -t deb \
-            -n protoskipper \
-            -v "$VERSION" \
-            --description "SCADA/BMS protocol testing and commissioning toolkit" \
-            --url "https://protoskipper.dev" \
-            --license "GPL-3.0-or-later" \
-            --maintainer "DataSailors Pvt Ltd <hello@datasailors.io>" \
-            --category "utils" \
-            --depends libxcb1 \
-            --after-install /dev/null \
-            dist/protoskipper-gui/=/opt/protoskipper/ \
-            --prefix /
-          # Add /usr/bin symlink via post-install script
-          mkdir -p staging/usr/bin
+          # Build a single staging tree: binary under /opt/protoskipper,
+          # wrapper script under /usr/bin so users can run `protoskipper-gui`.
+          mkdir -p staging/opt/protoskipper staging/usr/bin
+          cp -r dist/protoskipper-gui/. staging/opt/protoskipper/
           printf '#!/bin/sh\nexec /opt/protoskipper/protoskipper-gui "$@"\n' \
             > staging/usr/bin/protoskipper-gui
           chmod +x staging/usr/bin/protoskipper-gui
@@ -100,10 +90,11 @@ jobs:
             --url "https://protoskipper.dev" \
             --license "GPL-3.0-or-later" \
             --maintainer "DataSailors Pvt Ltd <hello@datasailors.io>" \
+            --category "utils" \
             --depends libxcb1 \
             -C staging \
-            usr/bin/protoskipper-gui=/usr/bin/protoskipper-gui
-          # Merge both into one final .deb by renaming
+            opt/protoskipper \
+            usr/bin/protoskipper-gui
           ls -la *.deb
 
       - uses: actions/upload-artifact@v4
@@ -116,6 +107,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-windows:
     name: Build Windows (.exe)
+    continue-on-error: true
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -160,6 +152,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-macos:
     name: Build macOS (.dmg)
+    continue-on-error: true
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,6 +196,9 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: [build-wheel, build-linux, build-windows, build-macos]
+    # Run as long as the wheel (the core artifact) succeeded; platform builds
+    # are best-effort (continue-on-error) and should not block the release.
+    if: ${{ !cancelled() && needs.build-wheel.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases and upload assets
@@ -214,6 +210,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets/
+          # merge-multiple so each artifact ends up in its own subdirectory.
+          # If a platform build was skipped/failed its artifact simply won't
+          # exist; the glob in the release step silently matches nothing.
+        continue-on-error: true
 
       - name: List release assets
         run: find release-assets/ -type f | sort
