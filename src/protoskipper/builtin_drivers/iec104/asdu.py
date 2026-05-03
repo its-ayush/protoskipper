@@ -65,6 +65,14 @@ class TypeID(IntEnum):
     C_CI_NA_1 = 101  # counter interrogation command
     C_RD_NA_1 = 102  # read command
     C_CS_NA_1 = 103  # clock synchronisation command
+    # File transfer services (IEC 60870-5-101/104 section 7.3.5)
+    F_FR_NA_1 = 120  # file ready
+    F_SR_NA_1 = 121  # section ready
+    F_SC_NA_1 = 122  # call directory / select / call file / call section
+    F_LS_NA_1 = 123  # last section / last segment
+    F_AF_NA_1 = 124  # ack file / ack section
+    F_SG_NA_1 = 125  # segment
+    F_DR_TA_1 = 126  # directory
 
 
 class COT(IntEnum):
@@ -370,6 +378,14 @@ _ELEMENT_SIZES: dict[int, int] = {
     TypeID.C_CI_NA_1: 1,  # QCC
     TypeID.C_RD_NA_1: 0,  # no element
     TypeID.C_CS_NA_1: 7,  # CP56Time2a
+    # File transfer services (§7.3.5)
+    TypeID.F_FR_NA_1: 4,  # length uint32_le
+    TypeID.F_SR_NA_1: 5,  # section (1) + length uint32_le (4)
+    TypeID.F_SC_NA_1: 2,  # call_type (1) + section (1)
+    TypeID.F_LS_NA_1: 2,  # last_qualifier (1) + section (1)
+    TypeID.F_AF_NA_1: 1,  # ack_type (1)
+    TypeID.F_SG_NA_1: -1,  # variable-length: section (1) + LOS (1) + data (LOS bytes)
+    TypeID.F_DR_TA_1: 13,  # name (8 bytes ASCII-padded) + length uint32_le (4) + status (1)
 }
 
 
@@ -469,6 +485,34 @@ def _encode_element(type_id: TypeID, obj: InformationObject) -> bytes:
             obj.value if isinstance(obj.value, datetime) else datetime.now(tz=timezone.utc)
         )
         return encode_cp56time2a(ts)
+    # File transfer services
+    if type_id is TypeID.F_FR_NA_1:
+        return struct.pack("<I", int(obj.value) if obj.value is not None else 0)
+    if type_id is TypeID.F_SR_NA_1:
+        section = int(obj.quality) if obj.quality is not None else 1
+        length = int(obj.value) if obj.value is not None else 0
+        return bytes([section]) + struct.pack("<I", length)
+    if type_id is TypeID.F_SC_NA_1:
+        call_type = int(obj.value) if obj.value is not None else 0
+        section = int(obj.quality) if obj.quality is not None else 0
+        return bytes([call_type & 0xFF, section & 0xFF])
+    if type_id is TypeID.F_LS_NA_1:
+        last_qual = int(obj.value) if obj.value is not None else 1
+        section = int(obj.quality) if obj.quality is not None else 0
+        return bytes([last_qual & 0xFF, section & 0xFF])
+    if type_id is TypeID.F_AF_NA_1:
+        ack_type = int(obj.value) if obj.value is not None else 0
+        return bytes([ack_type & 0xFF])
+    if type_id is TypeID.F_SG_NA_1:
+        section = int(obj.quality) if obj.quality is not None else 0
+        payload = obj.value if isinstance(obj.value, (bytes, bytearray)) else b""
+        seg_len = min(len(payload), 238)
+        return bytes([section & 0xFF, seg_len & 0xFF]) + bytes(payload[:seg_len])
+    if type_id is TypeID.F_DR_TA_1:
+        name = str(obj.value) if obj.value is not None else ""
+        name_bytes = name.encode("ascii", errors="replace")[:8].ljust(8, b"\x00")
+        length = int(obj.quality) if obj.quality is not None else 0
+        return name_bytes + struct.pack("<I", length) + bytes([0])
     raise EncodingError(f"Unsupported type id for encoding: {int(type_id)}")
 
 
@@ -570,6 +614,34 @@ def _decode_element(type_id: TypeID, buf: bytes, ioa: int) -> InformationObject:
     if type_id is TypeID.C_CS_NA_1:
         ts = decode_cp56time2a(buf[0:7])
         return InformationObject(ioa=ioa, value=ts, timestamp=ts, raw_element=buf)
+    # File transfer services
+    if type_id is TypeID.F_FR_NA_1:
+        (length,) = struct.unpack("<I", buf[0:4])
+        return InformationObject(ioa=ioa, value=length, raw_element=buf)
+    if type_id is TypeID.F_SR_NA_1:
+        section = buf[0]
+        (length,) = struct.unpack("<I", buf[1:5])
+        return InformationObject(ioa=ioa, value=length, quality=section, raw_element=buf)
+    if type_id is TypeID.F_SC_NA_1:
+        call_type = buf[0]
+        section = buf[1] if len(buf) > 1 else 0
+        return InformationObject(ioa=ioa, value=call_type, quality=section, raw_element=buf)
+    if type_id is TypeID.F_LS_NA_1:
+        last_qual = buf[0]
+        section = buf[1] if len(buf) > 1 else 0
+        return InformationObject(ioa=ioa, value=last_qual, quality=section, raw_element=buf)
+    if type_id is TypeID.F_AF_NA_1:
+        ack_type = buf[0]
+        return InformationObject(ioa=ioa, value=ack_type, raw_element=buf)
+    if type_id is TypeID.F_SG_NA_1:
+        section = buf[0]
+        seg_len = buf[1] if len(buf) > 1 else 0
+        payload = bytes(buf[2 : 2 + seg_len])
+        return InformationObject(ioa=ioa, value=payload, quality=section, raw_element=buf)
+    if type_id is TypeID.F_DR_TA_1:
+        name = buf[0:8].rstrip(b"\x00").decode("ascii", errors="replace")
+        (length,) = struct.unpack("<I", buf[8:12])
+        return InformationObject(ioa=ioa, value=name, quality=length, raw_element=buf)
     raise EncodingError(f"Unsupported type id for decoding: {int(type_id)}")
 
 
@@ -645,27 +717,48 @@ def decode_asdu(buf: bytes) -> Asdu:
     objects: list[InformationObject] = []
     pos = 6
     elem_size = element_size(type_id)
+    # elem_size == -1 → variable-length element (e.g. F_SG_NA_1: section + LOS + data)
     if sq:
         if pos + 3 > len(buf):
             raise EncodingError("Truncated ASDU: missing IOA in SQ form")
         ioa = _decode_ioa(buf[pos : pos + 3])
         pos += 3
         for i in range(n):
-            if pos + elem_size > len(buf):
-                raise EncodingError(f"Truncated ASDU: element {i} of {n} (need {elem_size} bytes)")
-            element = bytes(buf[pos : pos + elem_size])
-            pos += elem_size
+            if elem_size == -1:
+                # Variable-length: read section (1) + LOS (1), then LOS data bytes
+                if pos + 2 > len(buf):
+                    raise EncodingError(f"Truncated variable-length element {i} of {n}")
+                los = buf[pos + 1]
+                actual_size = 2 + los
+            else:
+                actual_size = elem_size
+            if pos + actual_size > len(buf):
+                raise EncodingError(
+                    f"Truncated ASDU: element {i} of {n} (need {actual_size} bytes)"
+                )
+            element = bytes(buf[pos : pos + actual_size])
+            pos += actual_size
             objects.append(_decode_element(type_id, element, ioa + i))
     else:
         for i in range(n):
-            if pos + 3 + elem_size > len(buf):
-                raise EncodingError(
-                    f"Truncated ASDU: object {i} of {n} (need {3 + elem_size} bytes)"
-                )
+            if pos + 3 > len(buf):
+                raise EncodingError(f"Truncated ASDU: object {i} of {n} (need IOA 3 bytes)")
             ioa = _decode_ioa(buf[pos : pos + 3])
             pos += 3
-            element = bytes(buf[pos : pos + elem_size])
-            pos += elem_size
+            if elem_size == -1:
+                # Variable-length: read section (1) + LOS (1), then LOS data bytes
+                if pos + 2 > len(buf):
+                    raise EncodingError(f"Truncated variable-length element {i} of {n}")
+                los = buf[pos + 1]
+                actual_size = 2 + los
+            else:
+                actual_size = elem_size
+            if pos + actual_size > len(buf):
+                raise EncodingError(
+                    f"Truncated ASDU: object {i} of {n} (need {3 + actual_size} bytes)"
+                )
+            element = bytes(buf[pos : pos + actual_size])
+            pos += actual_size
             objects.append(_decode_element(type_id, element, ioa))
 
     return Asdu(

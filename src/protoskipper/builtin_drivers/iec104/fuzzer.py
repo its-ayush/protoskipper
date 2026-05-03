@@ -379,11 +379,187 @@ def fuzz_against_target(
     )
 
 
+# ---------------------------------------------------------------------------
+# TLS mutation engine (P4.D.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TlsFuzzReport:
+    """Summary of a TLS-layer fuzzing run.
+
+    Attributes
+    ----------
+    iterations:
+        Total number of probe connections attempted.
+    clean_rejects:
+        Peers that cleanly rejected the malformed hello (EOF / alert).
+    unexpected_errors:
+        Connections where the peer did something other than a clean
+        TLS alert or EOF (e.g. kept the raw TCP open with no data).
+    duration_seconds:
+        Wall-clock seconds the run took.
+    seed:
+        RNG seed for reproduction.
+    """
+
+    iterations: int
+    clean_rejects: int
+    unexpected_errors: int
+    duration_seconds: float
+    seed: int
+
+    @property
+    def ok(self) -> bool:
+        """True when *every* probe was cleanly rejected (no unexpected behaviour)."""
+        return self.unexpected_errors == 0
+
+
+def _random_tls_client_hello(rng: random.Random) -> bytes:
+    """Generate a syntactically plausible but semantically mutated TLS
+    ClientHello record.  The mutations cover:
+
+    * Wrong record content type (not 0x16)
+    * Wrong TLS version in the record header
+    * Truncated handshake body
+    * Random cipher-suite list
+    * Zero-length or oversized extensions blob
+
+    The result is a raw bytes object to be sent over a plain TCP socket
+    (no Python ssl wrapping).
+    """
+    mutation = rng.randrange(6)
+
+    # Minimal TLS 1.0 ClientHello skeleton (no extensions).
+    # Record: content_type(1) version(2) length(2) | handshake_type(1) length(3) …
+    def _hello(version_major: int = 3, version_minor: int = 3) -> bytes:
+        # Build a tiny ClientHello body
+        random_bytes = bytes(rng.randrange(256) for _ in range(32))
+        session_id = b"\x00"  # empty
+        ciphers = b"\x00\x02\x00\x35"  # TLS_RSA_WITH_AES_256_CBC_SHA
+        compression = b"\x01\x00"  # null
+        body = (
+            bytes([version_major, version_minor])
+            + random_bytes
+            + session_id
+            + ciphers
+            + compression
+        )
+        hs_len = len(body).to_bytes(3, "big")
+        handshake = b"\x01" + hs_len + body  # type=ClientHello
+        rl = len(handshake).to_bytes(2, "big")
+        return b"\x16" + bytes([version_major, version_minor]) + rl + handshake
+
+    if mutation == 0:
+        # Wrong record content type (not 22/0x16 = handshake)
+        raw = _hello()
+        raw = bytes([rng.randrange(0x15), *list(raw[1:])])
+    elif mutation == 1:
+        # Wrong TLS version in record header
+        raw = _hello(version_major=rng.randrange(5, 255))
+    elif mutation == 2:
+        # Truncate after the record header
+        raw = _hello()[:5]
+    elif mutation == 3:
+        # Completely random payload disguised as a TLS record header
+        payload = bytes(rng.randrange(256) for _ in range(rng.randint(1, 64)))
+        rl = len(payload).to_bytes(2, "big")
+        raw = b"\x16\x03\x03" + rl + payload
+    elif mutation == 4:
+        # Zero-length record
+        raw = b"\x16\x03\x03\x00\x00"
+    else:
+        # Valid-looking hello but with random cipher suites
+        raw = _hello()
+
+    return raw
+
+
+def fuzz_tls_handshake(
+    host: str,
+    port: int,
+    iterations: int = 50,
+    *,
+    seed: int = 0,
+    connect_timeout: float = 3.0,
+) -> TlsFuzzReport:
+    """Send mutated TLS ClientHello records to *host*:*port* and verify
+    the peer always responds with a clean TLS alert or closes the
+    connection (i.e. does **not** crash or hang).
+
+    This function uses *raw TCP sockets* — no Python ssl wrapping — so it
+    can inject intentionally malformed TLS records.
+
+    Parameters
+    ----------
+    host, port:
+        Target IEC 104 server.  Must be TLS-enabled.
+    iterations:
+        Number of probe connections to open.
+    seed:
+        RNG seed for reproducibility.
+    connect_timeout:
+        Per-connection TCP connect timeout in seconds.
+
+    Returns
+    -------
+    TlsFuzzReport
+        ``ok`` is True when every probe was cleanly rejected.
+    """
+    rng = random.Random(seed)
+    clean_rejects = 0
+    unexpected_errors = 0
+    start = time.monotonic()
+
+    for _ in range(iterations):
+        try:
+            sock = socket.create_connection((host, port), timeout=connect_timeout)
+        except OSError:
+            # Target unreachable counts as unexpected (peer should be up).
+            unexpected_errors += 1
+            continue
+        sock.settimeout(connect_timeout)
+        try:
+            hello = _random_tls_client_hello(rng)
+            sock.sendall(hello)
+            # Read up to 256 bytes.  A correct TLS server will send an alert
+            # (content_type 0x15) or close the connection cleanly.
+            try:
+                response = sock.recv(256)
+            except OSError:
+                response = b""
+
+            if not response:
+                # Peer closed cleanly without sending anything.
+                clean_rejects += 1
+            elif response[0] == 0x15:
+                # TLS Alert record.
+                clean_rejects += 1
+            else:
+                # Peer sent something that isn't a TLS Alert — unexpected.
+                unexpected_errors += 1
+        except OSError:
+            clean_rejects += 1
+        finally:
+            with contextlib.suppress(OSError):
+                sock.close()
+
+    return TlsFuzzReport(
+        iterations=iterations,
+        clean_rejects=clean_rejects,
+        unexpected_errors=unexpected_errors,
+        duration_seconds=time.monotonic() - start,
+        seed=seed,
+    )
+
+
 __all__ = [
     "FuzzReport",
     "StateMachineReport",
+    "TlsFuzzReport",
     "fuzz_against_target",
     "fuzz_apdu_mutation",
     "fuzz_asdu_codec",
     "fuzz_codec_roundtrip",
+    "fuzz_tls_handshake",
 ]

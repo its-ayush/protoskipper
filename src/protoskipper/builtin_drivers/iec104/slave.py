@@ -72,6 +72,15 @@ from protoskipper.builtin_drivers.iec104.asdu import (
     decode_asdu,
     encode_asdu,
 )
+from protoskipper.builtin_drivers.iec104.file_transfer import (
+    MAX_SEGMENT_PAYLOAD,
+    DirectoryEntry,
+    build_directory_entry,
+    build_file_ready,
+    build_last_section,
+    build_section_ready,
+    build_segment,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -187,6 +196,9 @@ class Iec104SlaveServer:
         self._clients_lock = threading.Lock()
         self._port = 0
         self._started = False
+        # File store: IOA -> (filename, data)
+        self._files: dict[int, tuple[str, bytes]] = {}
+        self._files_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Configuration
@@ -207,6 +219,16 @@ class Iec104SlaveServer:
 
     def set_command_handler(self, handler: CommandHandler | None) -> None:
         self._command_handler = handler
+
+    def add_file(self, ioa: int, name: str, data: bytes) -> None:
+        """Register a file that can be browsed and downloaded by masters.
+
+        :param ioa: File name IOA (uniquely identifies the file).
+        :param name: Human-readable filename (up to 8 characters).
+        :param data: File contents.
+        """
+        with self._files_lock:
+            self._files[ioa] = (name, data)
 
     @property
     def port(self) -> int:
@@ -377,6 +399,10 @@ class Iec104SlaveServer:
             self._handle_read(session, req)
         elif type_id is TypeID.C_CS_NA_1:
             self._handle_clock_sync(session, req)
+        elif type_id is TypeID.F_SC_NA_1:
+            self._handle_file_service(session, req)
+        elif type_id is TypeID.F_AF_NA_1:
+            pass  # ack from master acknowledged — no slave action needed
         elif type_id in _COMMAND_TO_MONITOR:
             self._handle_command(session, req)
         else:
@@ -466,6 +492,51 @@ class Iec104SlaveServer:
                 objects=[InformationObject(ioa=0, value=now, timestamp=now)],
             )
         )
+
+    def _handle_file_service(self, session: _ClientSession, req: Asdu) -> None:
+        """Handle F_SC_NA_1 (call directory / select file / call section)."""
+        if not req.objects:
+            return
+        obj = req.objects[0]
+        call_type = int(obj.value) if obj.value is not None else 0
+        name_ioa = obj.ioa
+
+        if call_type == 0:
+            # Call directory: send one F_DR_TA_1 per registered file.
+            with self._files_lock:
+                files_snapshot = dict(self._files)
+            for fioa, (fname, fdata) in sorted(files_snapshot.items()):
+                entry = DirectoryEntry(ioa=fioa, name=fname, length=len(fdata))
+                session.send_asdu(build_directory_entry(self._cfg.ca, entry))
+            return
+
+        if call_type == 1:
+            # Select file: announce the file is ready.
+            with self._files_lock:
+                file_info = self._files.get(name_ioa)
+            if file_info is None:
+                self._reply_unknown_type(session, req)
+                return
+            _fname, fdata = file_info
+            session.send_asdu(build_file_ready(self._cfg.ca, name_ioa, len(fdata)))
+            return
+
+        if call_type == 3:
+            # Call section: stream segments then send last-section marker.
+            section = int(obj.quality) if obj.quality is not None else 1
+            with self._files_lock:
+                file_info = self._files.get(name_ioa)
+            if file_info is None:
+                return
+            _fname, fdata = file_info
+            session.send_asdu(build_section_ready(self._cfg.ca, name_ioa, section, len(fdata)))
+            offset = 0
+            while offset < len(fdata):
+                chunk = fdata[offset : offset + MAX_SEGMENT_PAYLOAD]
+                session.send_asdu(build_segment(self._cfg.ca, name_ioa, section, chunk))
+                offset += len(chunk)
+            # Last section = file done (we use one section per file)
+            session.send_asdu(build_last_section(self._cfg.ca, name_ioa, section, file_done=True))
 
     def _handle_command(self, session: _ClientSession, req: Asdu) -> None:
         if not req.objects:

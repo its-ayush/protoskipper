@@ -55,6 +55,7 @@ from protoskipper.gui.dialogs import (
     Iec104CommandDialog,
     Iec104ConformanceDialog,
     Iec104DiffDialog,
+    Iec104FuzzerDialog,
     Iec104PcapViewerDialog,
     NewConnectionDialog,
     NewSlaveDialog,
@@ -314,6 +315,13 @@ class MainWindow(QMainWindow):
         )
         self._action_iec104_conformance.triggered.connect(self._open_iec104_conformance_dialog)
         iec104_menu.addAction(self._action_iec104_conformance)
+
+        self._action_iec104_fuzzer = QAction(self.tr("Fuzzer\u2026"), self)
+        self._action_iec104_fuzzer.setToolTip(
+            "Launch the IEC 104 mutation fuzzer (LAB profile only)"
+        )
+        self._action_iec104_fuzzer.triggered.connect(self._open_iec104_fuzzer_dialog)
+        iec104_menu.addAction(self._action_iec104_fuzzer)
 
         iec104_menu.addSeparator()
 
@@ -1015,6 +1023,19 @@ class MainWindow(QMainWindow):
             session_manager=self._session_manager,
             parent=self,
         )
+        dlg.exec()
+
+    def _open_iec104_fuzzer_dialog(self) -> None:
+        """Tools → IEC 104 → Fuzzer… — open the mutation fuzzer panel."""
+        # Determine current profile: use the active session's profile if available,
+        # otherwise default to COMMISSIONING (locked out of fuzzer).
+        profile = SessionProfile.COMMISSIONING
+        sid = self._active_session_id()
+        if sid is not None:
+            info = self._state.session(sid)
+            if info is not None:
+                profile = info.profile
+        dlg = Iec104FuzzerDialog(profile=profile, parent=self)
         dlg.exec()
 
     def _save_iec104_setup(self) -> None:

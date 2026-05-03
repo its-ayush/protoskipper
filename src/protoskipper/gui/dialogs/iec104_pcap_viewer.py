@@ -23,11 +23,13 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QPersistentModelIndex,
+    QSize,
     QSortFilterProxyModel,
     Qt,
     QThread,
     Signal,
 )
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -38,6 +40,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableView,
     QTableWidget,
@@ -230,6 +233,180 @@ class _FrameFilterProxy(QSortFilterProxyModel):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# APCI Timeline widget — §P4.E.3
+# ---------------------------------------------------------------------------
+
+_FMT_COLORS: dict[str, QColor] = {
+    "I": QColor("#2ecc71"),  # green
+    "S": QColor("#e67e22"),  # orange
+    "U": QColor("#3498db"),  # blue
+    "?": QColor("#95a5a6"),  # grey
+}
+
+_DOT_R = 4  # dot radius in pixels
+_ROW_H = 12  # pixels between frame rows (vertical)
+_MARGIN_LEFT = 70  # space for time labels
+_MARGIN_RIGHT = 20
+_MARGIN_TOP = 30
+_MARGIN_BOTTOM = 30
+
+
+class _TimelineWidget(QWidget):
+    """Custom-painted APCI frame timeline.
+
+    X-axis: relative time (seconds from first frame).
+    Y-axis: frame index (top = first frame, bottom = last).
+    Dot colour: I=green, S=orange, U=blue.
+    The k/w outstanding-window is shown as a semi-transparent band between
+    the send-sequence number on a per-flow basis.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._rows: list[_FrameRow] = []
+        self._t0: float = 0.0
+        self._t1: float = 1.0
+        self.setMinimumWidth(600)
+
+    def append(self, row: _FrameRow) -> None:
+        if not self._rows:
+            self._t0 = row.frame.timestamp
+        self._t1 = max(self._t1, row.frame.timestamp)
+        self._rows.append(row)
+        h = max(200, _MARGIN_TOP + _MARGIN_BOTTOM + len(self._rows) * _ROW_H)
+        self.setMinimumHeight(h)
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        h = max(200, _MARGIN_TOP + _MARGIN_BOTTOM + len(self._rows) * _ROW_H)
+        return QSize(800, h)
+
+    def paintEvent(self, _event: object) -> None:  # type: ignore[override]
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = self.width()
+
+        span = max(self._t1 - self._t0, 1e-6)
+        plot_w = w - _MARGIN_LEFT - _MARGIN_RIGHT
+
+        # Axes
+        axis_pen = QPen(QColor("#aaaaaa"), 1)
+        p.setPen(axis_pen)
+        p.drawLine(_MARGIN_LEFT, _MARGIN_TOP, _MARGIN_LEFT, self.height() - _MARGIN_BOTTOM)
+        y_base = self.height() - _MARGIN_BOTTOM
+        p.drawLine(_MARGIN_LEFT, y_base, w - _MARGIN_RIGHT, y_base)
+
+        # X-axis labels (5 ticks)
+        p.setPen(QColor("#666666"))
+        for i in range(6):
+            t = i * span / 5
+            x = _MARGIN_LEFT + int(t / span * plot_w)
+            p.drawLine(x, self.height() - _MARGIN_BOTTOM, x, self.height() - _MARGIN_BOTTOM + 4)
+            p.drawText(
+                x - 20,
+                self.height() - _MARGIN_BOTTOM + 6,
+                40,
+                16,
+                Qt.AlignmentFlag.AlignCenter,
+                f"{t:.2f}s",
+            )
+
+        # Column header
+        p.drawText(
+            _MARGIN_LEFT,
+            4,
+            plot_w,
+            _MARGIN_TOP - 4,
+            Qt.AlignmentFlag.AlignCenter,
+            "APCI Frame Timeline  (● I-frame  ● S-frame  ● U-frame)",
+        )
+
+        # Draw dots
+        for idx, row in enumerate(self._rows):
+            rel_t = row.frame.timestamp - self._t0
+            x = _MARGIN_LEFT + int(rel_t / span * plot_w)
+            y = _MARGIN_TOP + idx * _ROW_H
+            color = _FMT_COLORS.get(row.fmt, _FMT_COLORS["?"])
+            p.setBrush(color)
+            p.setPen(QPen(color.darker(130), 1))
+            p.drawEllipse(x - _DOT_R, y - _DOT_R, _DOT_R * 2, _DOT_R * 2)
+
+        p.end()
+
+
+# ---------------------------------------------------------------------------
+# k-w outstanding-window analyser (per flow)
+# ---------------------------------------------------------------------------
+
+
+def _compute_kw_stats(rows: list[_FrameRow]) -> list[dict[str, object]]:
+    """Return a list of per-flow dicts with k/w window metrics.
+
+    Keys: flow, total_i, total_s, total_u, max_outstanding, avg_outstanding
+    """
+    # Track per-flow send/ack queues
+    from collections import defaultdict
+
+    # outstanding[flow] = number of I-frames sent but not yet acked
+    outstanding: dict[str, int] = defaultdict(int)
+    max_out: dict[str, int] = defaultdict(int)
+    total_out: dict[str, float] = defaultdict(float)
+    counts: dict[str, dict[str, int]] = defaultdict(lambda: {"I": 0, "S": 0, "U": 0})
+
+    # We track per directional flow (src→dst)
+    for row in rows:
+        flow = f"{row.src}→{row.dst}"
+        counts[flow][row.fmt] = counts[flow].get(row.fmt, 0) + 1
+
+        apdu = row.frame.apdu
+        if apdu is None:
+            continue
+
+        if row.fmt == "I":
+            # Each I-frame increments the sender's outstanding count
+            outstanding[flow] += 1
+            # N(R) from this I-frame acks frames from the reverse direction
+            rev_flow = f"{row.dst}→{row.src}"
+            if apdu.recv_seq is not None and outstanding[rev_flow] > 0:
+                # Conservative: just clear to 0 on any ack for simplicity
+                # (proper tracking would need per-seq bookkeeping)
+                nr = apdu.recv_seq
+                acked = min(nr, outstanding[rev_flow])
+                outstanding[rev_flow] = max(0, outstanding[rev_flow] - acked)
+        elif row.fmt == "S":
+            # S-frame acks all I-frames up to N(R) in the reverse direction
+            rev_flow = f"{row.dst}→{row.src}"
+            if apdu.recv_seq is not None:
+                acked = min(apdu.recv_seq, outstanding[rev_flow])
+                outstanding[rev_flow] = max(0, outstanding[rev_flow] - acked)
+
+        if outstanding[flow] > max_out[flow]:
+            max_out[flow] = outstanding[flow]
+        total_out[flow] += outstanding[flow]
+
+    results = []
+    all_flows = sorted(set(counts.keys()) | set(outstanding.keys()))
+    frame_count: dict[str, int] = {}
+    for row in rows:
+        flow = f"{row.src}→{row.dst}"
+        frame_count[flow] = frame_count.get(flow, 0) + 1
+
+    for flow in all_flows:
+        fc = frame_count.get(flow, 1)
+        results.append(
+            {
+                "flow": flow,
+                "total_i": counts[flow].get("I", 0),
+                "total_s": counts[flow].get("S", 0),
+                "total_u": counts[flow].get("U", 0),
+                "max_outstanding": max_out[flow],
+                "avg_outstanding": round(total_out[flow] / max(fc, 1), 2),
+            }
+        )
+    return results
+
+
 class Iec104PcapViewerDialog(QDialog):
     """Offline IEC 104 PCAP viewer (§5.11)."""
 
@@ -317,6 +494,29 @@ class Iec104PcapViewerDialog(QDialog):
         self._hex_view.setFont(self.font())
         tabs.addTab(self._hex_view, "Raw Hex")
 
+        # --- Tab 5: Timeline / k-w analysis (§P4.E.3) ---
+        timeline_widget = QWidget()
+        timeline_layout = QVBoxLayout(timeline_widget)
+
+        self._timeline_canvas = _TimelineWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._timeline_canvas)
+        timeline_layout.addWidget(scroll, stretch=3)
+
+        # k-w outstanding-window table (populated after load completes)
+        kw_label = QLabel("k/w Window Analysis (per flow):")
+        timeline_layout.addWidget(kw_label)
+        self._kw_table = QTableWidget(0, 6)
+        self._kw_table.setHorizontalHeaderLabels(
+            ["Flow", "I-frames", "S-frames", "U-frames", "Max Outstanding", "Avg Outstanding"]
+        )
+        self._kw_table.horizontalHeader().setStretchLastSection(True)
+        self._kw_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._kw_table.setMaximumHeight(160)
+        timeline_layout.addWidget(self._kw_table)
+        tabs.addTab(timeline_widget, "Timeline / k-w")
+
     # ------------------------------------------------------------------
     def _load(self, path: str) -> None:
         self._loader = _PcapLoaderThread(path)
@@ -328,10 +528,12 @@ class Iec104PcapViewerDialog(QDialog):
         row = _FrameRow(frame)
         self._frames_model.append(row)
         self._update_sessions(row)
+        self._timeline_canvas.append(row)
 
     def _on_load_finished(self, total: int) -> None:
         self._status_lbl.setText(f"Loaded {total} frames from {Path(self._path).name}")
         self._populate_stats()
+        self._populate_kw_table()
 
     # ------------------------------------------------------------------
     # Sessions tab
@@ -379,6 +581,25 @@ class Iec104PcapViewerDialog(QDialog):
             item = QTableWidgetItem(str(count))
             item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self._stats_table.setItem(row, 1, item)
+
+    # ------------------------------------------------------------------
+    # Timeline / k-w tab (§P4.E.3)
+    # ------------------------------------------------------------------
+
+    def _populate_kw_table(self) -> None:
+        rows = self._frames_model.all_rows()
+        stats = _compute_kw_stats(rows)
+        self._kw_table.setRowCount(0)
+        for stat in stats:
+            r = self._kw_table.rowCount()
+            self._kw_table.setRowCount(r + 1)
+            self._kw_table.setItem(r, 0, QTableWidgetItem(str(stat["flow"])))
+            for col, key in enumerate(
+                ("total_i", "total_s", "total_u", "max_outstanding", "avg_outstanding"), 1
+            ):
+                item = QTableWidgetItem(str(stat[key]))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self._kw_table.setItem(r, col, item)
 
     # ------------------------------------------------------------------
     # Raw hex view
