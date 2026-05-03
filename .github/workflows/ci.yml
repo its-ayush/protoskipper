@@ -142,7 +142,7 @@ jobs:
       - name: pytest (GUI) under Xvfb
         run: >
           xvfb-run --auto-servernum
-          pytest tests/gui/ -q --tb=short -m gui --timeout=60
+          pytest tests/gui/ -q --tb=short -m gui --timeout=60 --timeout-method=thread
         env:
           QT_QPA_PLATFORM: xcb
 

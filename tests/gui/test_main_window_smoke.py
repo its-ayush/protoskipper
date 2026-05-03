@@ -96,13 +96,23 @@ def test_main_window_full_session_lifecycle(
     ref = _make_ref(device)
 
     # ---- open session --------------------------------------------------
+    # Pass initial_objects so the session has registers to work with.
+    # Modbus has no self-description protocol so enumerate_objects returns
+    # nothing; initial_objects are injected after that empty enumeration.
     with qtbot.waitSignal(state.session_opened, timeout=5_000):  # type: ignore[union-attr]
-        sid = manager.open_session(device, SessionProfile.LAB, "smoke-test")
+        sid = manager.open_session(device, SessionProfile.LAB, "smoke-test", initial_objects=[ref])
+
+    # objects_enumerated fires asynchronously on the worker thread after
+    # enumerate_objects completes and initial_objects are injected.
+    qtbot.waitUntil(  # type: ignore[union-attr]
+        lambda: len(state.session(sid).objects) > 0,  # type: ignore[union-attr]
+        timeout=5_000,
+    )
 
     info = state.session(sid)
     assert info is not None
     assert info.is_open
-    assert len(info.objects) > 0, "objects_enumerated must fire on open"
+    assert len(info.objects) > 0, "initial objects were not injected"
 
     # ---- read holding:5 ------------------------------------------------
     blocker_read = qtbot.waitSignal(state.read_completed, timeout=5_000)  # type: ignore[union-attr]
@@ -140,6 +150,10 @@ def test_main_window_full_session_lifecycle(
     info_after = state.session(sid)
     assert info_after is not None
     assert not info_after.is_open
+
+    # Shut down all worker threads before pytest teardown to prevent
+    # "QThread: Destroyed while thread is still running" + abort on exit.
+    manager.shutdown()
 
     # ---- verify audit log ----------------------------------------------
     logs = list(audit_dir.glob("*.audit.sqlite"))
