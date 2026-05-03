@@ -568,8 +568,178 @@ class Iec104SlaveServer:
 
 
 # ---------------------------------------------------------------------------
-# Per-connection state machine
+# Spontaneous event generator (P4.C.3)
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class EventSpec:
+    """Specification for one periodically emitted spontaneous event.
+
+    The generator calls *updater(current_value)* each period to compute the
+    next value.  If *updater* is ``None`` the stored point value is emitted
+    unchanged (useful for alarm cycling tests).
+    """
+
+    ioa: int
+    """Information Object Address of the target point."""
+
+    interval: float
+    """Emission interval in seconds.  Must be > 0."""
+
+    updater: Callable[[Any], Any] | None = None
+    """Optional function ``f(current_value) -> new_value``.
+
+    Examples::
+
+        EventSpec(1001, 0.1, lambda v: not v)          # toggle bool
+        EventSpec(4001, 0.5, lambda v: (v + 0.1) % 1)  # sawtooth float
+        EventSpec(3001, 1.0)                            # repeat unchanged
+    """
+
+    quality: Quality | None = None
+    """Quality to stamp on emitted ASDUs.  ``None`` → keep the point's current quality."""
+
+
+class SpontaneousEventGenerator:
+    """Drive periodic or scripted spontaneous events from an :class:`Iec104SlaveServer`.
+
+    The generator runs one daemon background thread.  All registered
+    :class:`EventSpec` entries fire independently at their own *interval*.
+
+    Usage::
+
+        gen = SpontaneousEventGenerator(srv)
+        gen.add(EventSpec(ioa=1001, interval=0.1, updater=lambda v: not v))
+        gen.add(EventSpec(ioa=4001, interval=0.5))
+        gen.start()
+        time.sleep(5)
+        gen.stop()
+
+    The generator is a context manager::
+
+        with SpontaneousEventGenerator(srv) as gen:
+            gen.add(EventSpec(1001, 0.1, lambda v: not v))
+            time.sleep(5)
+    """
+
+    def __init__(self, server: Iec104SlaveServer) -> None:
+        self._server = server
+        self._specs: list[_ScheduledSpec] = []
+        self._specs_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._running = False
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def add(self, spec: EventSpec) -> None:
+        """Register an event spec.
+
+        Can be called before or after :meth:`start`.
+        """
+        if spec.interval <= 0:
+            raise ValueError(f"EventSpec.interval must be > 0, got {spec.interval!r}")
+        with self._specs_lock:
+            self._specs.append(_ScheduledSpec(spec, next_at=time.monotonic() + spec.interval))
+
+    def remove(self, ioa: int) -> None:
+        """Deregister all event specs for *ioa*."""
+        with self._specs_lock:
+            self._specs = [s for s in self._specs if s.spec.ioa != ioa]
+
+    def clear(self) -> None:
+        """Remove all registered event specs."""
+        with self._specs_lock:
+            self._specs.clear()
+
+    def start(self) -> None:
+        """Start the background emission thread."""
+        if self._running:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="iec104-spont-gen",
+            daemon=True,
+        )
+        self._running = True
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        """Stop the background thread and wait for it to exit."""
+        if not self._running:
+            return
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+        self._running = False
+
+    def __enter__(self) -> SpontaneousEventGenerator:
+        self.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stop()
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            now = time.monotonic()
+            # Collect due specs under the lock (copy to avoid holding lock
+            # during I/O).
+            due: list[_ScheduledSpec] = []
+            with self._specs_lock:
+                for sched in self._specs:
+                    if now >= sched.next_at:
+                        due.append(sched)
+                        sched.next_at = now + sched.spec.interval
+
+            for sched in due:
+                spec = sched.spec
+                try:
+                    point = self._server.get_point(spec.ioa)
+                    if point is None:
+                        _logger.debug("EventSpec IOA %d not registered; skipping", spec.ioa)
+                        continue
+                    new_value = (
+                        spec.updater(point.value) if spec.updater is not None else point.value
+                    )
+                    quality = spec.quality if spec.quality is not None else point.quality
+                    self._server.update(
+                        ioa=spec.ioa,
+                        value=new_value,
+                        quality=quality,
+                        timestamp=datetime.now(tz=timezone.utc),
+                    )
+                except Exception:
+                    _logger.warning(
+                        "SpontaneousEventGenerator error for IOA %d", spec.ioa, exc_info=True
+                    )
+
+            # Sleep a short tick to avoid burning CPU. The tick is bounded by
+            # the minimum interval among all specs (capped at 10 ms).
+            with self._specs_lock:
+                if self._specs:
+                    min_interval = min(s.spec.interval for s in self._specs)
+                    tick = min(min_interval * 0.5, 0.01)
+                else:
+                    tick = 0.01
+            self._stop.wait(timeout=tick)
+
+
+@dataclass
+class _ScheduledSpec:
+    """Internal: an EventSpec with a monotonic next-fire deadline."""
+
+    spec: EventSpec
+    next_at: float
 
 
 class _ClientSession:
@@ -732,7 +902,9 @@ __all__ = [
     "QDS_IV",
     "QOI_STATION",
     "CommandHandler",
+    "EventSpec",
     "Iec104SlaveServer",
     "SlaveConfig",
     "SlavePoint",
+    "SpontaneousEventGenerator",
 ]
