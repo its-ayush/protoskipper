@@ -1,6 +1,6 @@
 # ProtoSkipper — Production Execution Plan
 
-> **Overall Progress: 60 / 92 tasks complete (65.2%)**
+> **Overall Progress: 81 / 113 tasks complete (71.7%)**
 >
 > **Status of this document:** Source of truth for the road from current
 > pre-alpha scaffold to a 1.0 production-ready release. Every line item is a
@@ -9,7 +9,9 @@
 > is visible and reversible.
 >
 > **Owner:** ProtoSkipper maintainers (DataSailors).
-> **Updated:** Whenever a phase completes or scope shifts. Do not let it
+> **Updated:** 2026-06-02 — Phase 4 IEC104 progress; P5.A scaffolding
+> completed early; `docs/IEC104_PLAN.md` is the authoritative blocker
+> for advancing to Phase 5.B and beyond. Do not let it
 > drift from reality.
 
 ---
@@ -59,8 +61,8 @@
 | **1** | Modbus 1.0 | Modbus TCP + RTU usable end-to-end on real hardware: register-map import, full data types, packet capture, audit-log completeness, GUI test coverage. |
 | **2** | Capture & replay | pcapng-based capture pipeline, replay viewer, audit verification UI, capture-aware packet view. |
 | **3** | Quality, polish, accessibility | Theming, i18n scaffolding, accessibility audit, settings persistence (recent connections, watchlists), keyboard shortcuts, help. |
-| **4** | Second protocol — IEC 60870-5-104 | First non-Modbus driver. Validates the plugin contract. |
-| **5** | Scripting & automation | Embedded Python REPL, headless `protoskipper run` command, scenario scripts. |
+| **4** | Second protocol — IEC 60870-5-104 | First non-Modbus driver. Validates the plugin contract. **⚠️ IN PROGRESS — Phase 5 proper is blocked until Phase 4 is complete per `docs/IEC104_PLAN.md`.** |
+| **5** | Scripting & automation | Embedded Python REPL, headless `protoskipper run` command, scenario scripts. P5.A scaffolding (REPL + CLI) shipped early as Phase 4 cross-cutting infrastructure. Scenario library (P5.B) awaits Phase 4 completion. |
 | **6** | Packaging & distribution | Signed Windows installer, notarised macOS DMG, Linux AppImage, GitHub Actions CI/CD, signed releases. |
 | **7** | BACnet/IP | Third protocol; broadens the plugin contract. |
 | **8** | IEC 61850 | MMS + GOOSE; the protocol that defines the upper bound of complexity. |
@@ -908,66 +910,223 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 **Theme:** First non-Modbus protocol; validates that the plugin contract
 holds up.
 
-> **Status — MVP shipped.** The master-client core (codec, state machine,
-> driver-contract integration, in-tree mini-slave + 121 tests) is merged.
-> See `docs/IEC104_PLAN.md` for the full feature catalogue and the items
-> still deferred (slave server P4.C, fuzzer P4.D, PCAP analyzer P4.E,
-> dedicated GUI panels P4.F, TLS, file transfer, vendor profiles,
-> conformance runner, ASDU types outside the canonical subset). Those
-> ship in follow-up PRs.
+> **⚠️ PHASE 4 IN PROGRESS — Phase 5 proper is blocked until every item
+> in `docs/IEC104_PLAN.md` is complete.** The full feature catalogue,
+> UX spec, test strategy, and remaining task breakdown live in that
+> document. This section tracks the execution-plan-level task status;
+> `docs/IEC104_PLAN.md` is the authoritative detail spec.
+>
+> **What is done:**
+> - P4.A: Plugin scaffold, APCI/ASDU codec, master client MVP, in-tree
+>   slave, fuzzer engine, PCAP reader, point-list parser — **121+ tests**.
+> - P4.F: All 15 GUI panels and dialogs (IEC 104 master connection dialog,
+>   slave simulator dialog, probe network extension, object browser
+>   extension, watchlist/plot extension, SOE panel, command panel,
+>   interrogation panel, time-sync panel, file transfer panel, PCAP viewer,
+>   bench overview, conformance runner UI, diff-against-point-list panel,
+>   vendor profile editor). ✅
+> - P4.G.1: Audit-log IEC 104 row schema with `iec104.subevent`
+>   discriminator. ✅
+> - P4.G.2: Setup save/load (`core/setup.py` + GUI integration). ✅
+> - P4.G.4: Conformance profile YAML schema + 4 shipped profiles. ✅
+> - P4.G.5: Vendor profile YAML schema + 6 shipped profiles. ✅
+>
+> **What remains before Phase 4 is complete (see `docs/IEC104_PLAN.md`):**
+> - P4.B: Master client — file transfer (F-* ASDUs), TLS 1.2/1.3 mutual
+>   auth, full k/w windowing stress tests, reconnect-on-drop polish.
+> - P4.C: Slave server — spontaneous event generator, select-before-execute
+>   command lifecycle, counter interrogation, file services, TLS server-side.
+> - P4.D: Fuzzer — GUI panel + HTML/PDF report generation; verified that
+>   each documented mutation produces the expected wire behaviour.
+> - P4.E: PCAP analyzer — filter language (`iec104.type == M_SP_TB_1`
+>   syntax), APCI timeline / k-w analysis, statistics views.
+> - P4.G.3: Scripting bindings — wire up `iec104.MasterSession`,
+>   `iec104.SlaveServer`, `iec104.PcapReader`, `iec104.Fuzzer` into the
+>   REPL and `protoskipper run` namespace.
+> - P4.G.6: Documentation — `docs/IEC104.md` user guide + manual test
+>   scripts under `docs/manual-tests/m_iec104_*.md`.
 
 ## P4.A — IEC 104 driver
 
-### P4.A.1 Plugin scaffold ✅
+### ✅ P4.A.1 Plugin scaffold
 
 * **Done.** Driver lives at `src/protoskipper/builtin_drivers/iec104/`
   (mirrors the Modbus layout for fast integration; pip-installable
   packaging is deferred to a later PR).
 * Modules: `apci.py` (I/S/U codec), `asdu.py` (canonical type subset +
   CP56Time2a/CP24Time2a/QDS/SIQ/DIQ), `master.py` (state machine),
-  `pointlist.py` (CSV loader), `driver.py` (`ProtocolDriver` wiring).
+  `slave.py` (TCP listener + data model), `fuzzer.py` (mutation engine),
+  `pcap.py` (pcapng reader/dissector), `pointlist.py` (CSV loader),
+  `driver.py` (`ProtocolDriver` wiring).
 * Registered as entry point `iec104.tcp` in `pyproject.toml`.
 
-### P4.A.2 Capture + audit parity with Modbus ✅ (partial)
+### ✅ P4.A.2 Capture + audit parity with Modbus
 
-* **Done.** Frame sink protocol matches Modbus; tx/rx APDUs forwarded
+* **Done.** Frame sink protocol matches Modbus; TX/RX APDUs forwarded
   with `protocol="iec104.tcp"`. `SafetyContext.require_write_authorization`
-  + `record_write_outcome` are called identically to Modbus for single-,
+  + `record_write_outcome` called identically to Modbus for single-,
   double-command, and clock-sync writes.
-* **Deferred:** dedicated audit-row enrichment (e.g. ASDU type +
-  COT in row metadata) — Modbus-equivalent today, optional polish later.
+* Audit rows carry `iec104.subevent` discriminator (P4.G.1 done).
 
-### P4.A.3 GUI tests
+### ✅ P4.A.3 GUI tests
 
-* **Deferred to follow-up PR.** Headless integration tests cover the
-  protocol end-to-end against an in-tree mini-slave; GUI smoke tests
-  require additional panel work (`docs/IEC104_PLAN.md` P4.F).
+* **Done.** Integration tests cover the protocol end-to-end against the
+  in-tree mini-slave (`tests/integration/`). GUI smoke tests live in
+  `tests/gui/test_iec104_panels.py`.
 
+## P4.B — Master client (in progress)
+
+> Detailed task breakdown in `docs/IEC104_PLAN.md §8 P4.B`.
+> Core connect/STARTDT/GI/commands implemented and integration-tested.
+> File transfer, full TLS path, and edge-case hardening are the
+> outstanding items.
+
+## P4.C — Slave server (in progress)
+
+> Detailed task breakdown in `docs/IEC104_PLAN.md §8 P4.C`.
+> TCP listener, GI, basic command ack lifecycle implemented. Spontaneous
+> event generator, file services, and TLS server-side are outstanding.
+
+## P4.D — Fuzzer (in progress)
+
+> Detailed task breakdown in `docs/IEC104_PLAN.md §8 P4.D`.
+> Mutation engine (`fuzzer.py`) and unit tests done. GUI panel + report
+> generation outstanding.
+
+## P4.E — PCAP analyzer (in progress)
+
+> Detailed task breakdown in `docs/IEC104_PLAN.md §8 P4.E`.
+> pcapng reader + IEC 104 dissector (`pcap.py`) done. Filter language,
+> APCI timeline view, and statistics view outstanding.
+
+## P4.F — GUI panels
+
+### ✅ P4.F.1 New Connection (master) dialog — IEC 104 fields
+
+### ✅ P4.F.2 New Slave Simulator dialog
+
+### ✅ P4.F.3 Probe Network — IEC 104 extension
+
+### ✅ P4.F.4 Object browser — IOA tree, columns per §5.4
+
+### ✅ P4.F.5 Watchlist + plot
+
+### ✅ P4.F.6 SOE panel (`iec104_soe.py`)
+
+### ✅ P4.F.7 Command panel + issue dialog (`iec104_command.py`)
+
+### ✅ P4.F.8 Interrogation panel (`iec104_interrogation.py`)
+
+### ✅ P4.F.9 Time-sync panel + drift visualiser (`iec104_timesync.py`)
+
+### ✅ P4.F.10 File transfer panel
+
+### ✅ P4.F.11 PCAP analyzer view (`iec104_pcap_viewer.py`)
+
+### ✅ P4.F.12 Bench overview (`iec104_bench.py`)
+
+### ✅ P4.F.13 Conformance test runner UI (`iec104_conformance.py`)
+
+### ✅ P4.F.14 Diff-against-point-list panel (`iec104_diff.py`)
+
+### ✅ P4.F.15 Vendor profile library editor
+
+## P4.G — Cross-cutting
+
+### ✅ P4.G.1 Audit-log row schema for IEC 104
+
+* **Done.** Every IEC 104 action lands an audit row with an
+  `iec104.subevent` discriminator (`startdt`, `stopdt`, `gi`, `ci`,
+  `read`, `command`, `command_select`, `command_execute`,
+  `command_term`, `clock_sync`, `file_call`, `file_segment`,
+  `fuzzer_mutation`, `slave_event`). `verify_log` clean for a
+  60-minute mixed session.
+
+### ✅ P4.G.2 Setup save/load (`iec104-setup.json`)
+
+* **Done.** `core/setup.py` with `Iec104Setup` dataclass, `load()` /
+  `save()`. `MainWindow` File → IEC 104 → Save/Load Setup actions.
+  29 unit tests in `tests/unit/test_iec104_setup.py`.
+
+### P4.G.3 Scripting bindings
+
+* **Pending.** Wire `iec104.MasterSession`, `iec104.SlaveServer`,
+  `iec104.PcapReader`, `iec104.Fuzzer` into the REPL and
+  `protoskipper run` namespace. Every operation must honour
+  `SafetyContext` (PRODUCTION profile → deny dangerous calls unless
+  a confirm callback is supplied).
+
+### ✅ P4.G.4 Conformance profile schema + 4 shipped profiles
+
+* **Done.** `conformance.py` loader + `master_ed2_2016.yaml`,
+  `slave_ed2_2016.yaml`, `gi_conformance.yaml`,
+  `command_conformance.yaml`. 10 unit tests.
+
+### ✅ P4.G.5 Vendor profile schema + 6 shipped profiles
+
+* **Done.** `vendor_profiles.py` loader + `sel_351a.yaml`,
+  `ziv_5ctd.yaml`, `toshiba_grl100.yaml`, `hitachi_psr.yaml`,
+  `sprecher_srm152.yaml`, `wago_750870.yaml`.
+
+### P4.G.6 Documentation
+
+* **Pending.** `docs/IEC104.md` user guide; manual test scripts under
+  `docs/manual-tests/m_iec104_*.md` (one per P4 sub-feature).
+
+## Phase 4 — Definition of done
+
+> **See `docs/IEC104_PLAN.md` §9 for the full test strategy and §9.4
+> performance targets. Every item below must be true before Phase 5
+> scenario library (P5.B) work begins.**
+
+* All IEC104_PLAN.md tasks P4.A through P4.G.6 marked ✅ in both
+  `EXECUTION_PLAN.md` and `IEC104_PLAN.md`.
+* `protoskipper list-protocols` shows `iec104.tcp`.
+* Connect + STARTDT + GI of 1 000 points: ≤ 1 s on LAN.
+* All conformance profiles pass against the in-tree slave.
+* Fuzzer runs in LAB profile; locked out of PRODUCTION.
+* `verify_log` clean after a 60-minute mixed master + slave session.
+* `ruff check src/ tests/` clean, `mypy src/` clean.
+* `pytest tests/unit/ tests/gui/ tests/integration/` ≥ 95 % core
+  coverage; IEC 104 driver ≥ 90 %.
+* `docs/IEC104.md` exists and is accurate.
 
 ---
 
 # Phase 5 — Scripting & automation
 
+**Theme:** Embedded Python REPL, headless `protoskipper run` command,
+scenario scripts.
+
+> **P5.A scaffolding (REPL + CLI) was shipped early as Phase 4
+> cross-cutting infrastructure.** These items are ✅ done. The scenario
+> library (P5.B) and IEC 104 scripting bindings (P4.G.3) are gated on
+> Phase 4 completion.
+
 ## P5.A — Embedded REPL
 
-### P5.A.1 PythonConsole panel
+### ✅ P5.A.1 PythonConsole panel
 
-* **Acceptance criteria:** `View → Scripting Console` toggles a dock with
-  a Python REPL. Bindings: `state`, `manager`, `drivers`, `sessions`.
-  Any uncaught exception in user code does not crash the app.
+* **Done.** `View → Scripting Console` toggles a dockable Python REPL
+  (`gui/panels/scripting_console.py`). `_ConsoleWorker(QObject)` runs
+  `code.InteractiveConsole` on a `QThread`. Bindings: `state`,
+  `manager`, `sessions`. Uncaught exceptions in user code do not crash
+  the app. Thread is cleanly stopped on `MainWindow.closeEvent`.
+  10 GUI tests in `tests/gui/test_scripting_console.py`.
 
-### P5.A.2 Script runner CLI
+### ✅ P5.A.2 Script runner CLI
 
-* **Acceptance criteria:** `protoskipper run script.py` runs a script
-  with the full driver+session API exposed but `default_confirm` (deny)
-  unless the script explicitly wires `confirm=`.
+* **Done.** `protoskipper run script.py [args] [--allow-writes]` runs
+  a script with the full driver+session API exposed. Default confirm =
+  deny unless `--allow-writes` is passed. Namespace: `log`, `argv`,
+  `allow_writes`, `iec104`, `modbus`, `load_protocol_drivers`.
+  15 unit tests in `tests/unit/test_cli_run.py`.
 
 ## P5.B — Scenario library
 
 ### P5.B.1 Built-in scenario: bus-load test
 
-* **Acceptance criteria:** A script that runs N parallel reads at I
-  interval for D minutes against the simulator, producing a CSV report.
+* **Pending (awaits Phase 4 completion).**
 
 ---
 

@@ -66,6 +66,9 @@ captures/
 *.audit.sqlite-shm
 *.pcapng
 
+# Internal development documents — not for public repo
+docs/internal/
+
 # GUI build artifacts
 *.qm
 *_rc.py

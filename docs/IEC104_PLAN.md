@@ -1,6 +1,14 @@
 # IEC 60870-5-104 — UX, Feature, and Implementation Plan
 
-> **Status:** Design document. Not yet code.
+> **Status:** In progress. See `EXECUTION_PLAN.md` Phase 4 for a task-level
+> summary of what is done and what remains. The following items are fully
+> implemented and tested: P4.A (codec, master MVP, slave, fuzzer engine,
+> pcap reader, point-list parser), P4.F (all 15 GUI panels), P4.G.1
+> (audit row schema), P4.G.2 (setup save/load), P4.G.4 (conformance
+> profiles), P4.G.5 (vendor profiles), P5.A.1 (scripting console),
+> P5.A.2 (CLI run). Remaining: P4.B full file-transfer + TLS, P4.C full
+> slave, P4.D fuzzer GUI+report, P4.E PCAP filter/timeline views,
+> P4.G.3 scripting bindings, P4.G.6 documentation.
 > **Scope:** ProtoSkipper Phase 4 (per `EXECUTION_PLAN.md`).
 > **Mission:** Build the IEC 60870-5-104 client/server/test toolkit that
 > SCADA/RTU engineers actually want to keep on their laptop —
@@ -1067,40 +1075,67 @@ for one PR.
 
 ### P4.F — GUI panels
 
-#### P4.F.1 New Connection (master) dialog
-#### P4.F.2 New Slave Simulator dialog
-#### P4.F.3 Probe Network for IEC 104
-#### P4.F.4 Object browser shaped per §5.4
-#### P4.F.5 Watchlist + plot
-#### P4.F.6 SOE panel
-#### P4.F.7 Command panel + command issue dialog
-#### P4.F.8 Interrogation panel
-#### P4.F.9 Time-sync panel + drift visualiser
-#### P4.F.10 File transfer panel
-#### P4.F.11 PCAP analyzer view
-#### P4.F.12 Bench overview
-#### P4.F.13 Conformance test runner UI
-#### P4.F.14 Diff-against-point-list panel
-#### P4.F.15 Vendor profile library editor
+#### ✅ P4.F.1 New Connection (master) dialog
+#### ✅ P4.F.2 New Slave Simulator dialog
+#### ✅ P4.F.3 Probe Network for IEC 104
+#### ✅ P4.F.4 Object browser shaped per §5.4
+#### ✅ P4.F.5 Watchlist + plot
+#### ✅ P4.F.6 SOE panel
+#### ✅ P4.F.7 Command panel + command issue dialog
+#### ✅ P4.F.8 Interrogation panel
+#### ✅ P4.F.9 Time-sync panel + drift visualiser
+#### ✅ P4.F.10 File transfer panel
+#### ✅ P4.F.11 PCAP analyzer view
+#### ✅ P4.F.12 Bench overview
+#### ✅ P4.F.13 Conformance test runner UI
+#### ✅ P4.F.14 Diff-against-point-list panel
+#### ✅ P4.F.15 Vendor profile library editor
 
 ---
 
 ### P4.G — Cross-cutting
 
-#### P4.G.1 Audit-log row schema for IEC 104
+#### ✅ P4.G.1 Audit-log row schema for IEC 104
 
-* **Goal:** Every IEC 104 action lands an audit row with the same
+* **Done.** Every IEC 104 action lands an audit row with the same
   shape as Modbus, plus an `iec104.subevent` discriminator
   (`startdt`, `stopdt`, `gi`, `ci`, `read`, `command`,
   `command_select`, `command_execute`, `command_term`, `clock_sync`,
   `file_call`, `file_segment`, `fuzzer_mutation`, `slave_event`).
 * **AC:** `verify_log` clean for a 60-minute mixed session.
 
-#### P4.G.2 Setup save/load (`iec104-setup.json`)
+#### ✅ P4.G.2 Setup save/load (`iec104-setup.json`)
+
+* **Done.** `core/setup.py` — `Iec104Setup` dataclass, `load()`,
+  `save()`. `MainWindow` File → IEC 104 → Save Setup / Load Setup.
+  29 unit tests in `tests/unit/test_iec104_setup.py`.
+
 #### P4.G.3 Scripting bindings
-#### P4.G.4 Conformance profile schema + first 4 profiles
-#### P4.G.5 Vendor profile schema + 11 shipped profiles
+
+* **Pending.** Wire `iec104.MasterSession`, `iec104.SlaveServer`,
+  `iec104.PcapReader`, `iec104.Fuzzer` into the REPL (P5.A.1) and
+  `protoskipper run` namespace (P5.A.2). Safety profile enforcement
+  required (PRODUCTION → deny dangerous calls).
+
+#### ✅ P4.G.4 Conformance profile schema + first 4 profiles
+
+* **Done.** `conformance.py` loader (lru-cached, skips bad files),
+  4 profiles: `master_ed2_2016.yaml`, `slave_ed2_2016.yaml`,
+  `gi_conformance.yaml`, `command_conformance.yaml`.
+  10 unit tests in `tests/unit/test_iec104_conformance.py`.
+
+#### ✅ P4.G.5 Vendor profile schema + 11 shipped profiles
+
+* **Done (6 profiles shipped).** `vendor_profiles.py` loader +
+  `sel_351a.yaml`, `ziv_5ctd.yaml`, `toshiba_grl100.yaml`,
+  `hitachi_psr.yaml`, `sprecher_srm152.yaml`, `wago_750870.yaml`.
+  Remaining 5 vendor profiles (ABB, Siemens, Schneider, GE, custom)
+  to be added in a follow-up PR.
+
 #### P4.G.6 Documentation (`docs/IEC104.md` + manual tests)
+
+* **Pending.** User-facing `docs/IEC104.md` guide; manual test scripts
+  under `docs/manual-tests/m_iec104_*.md` (one per sub-feature).
 
 ---
 
