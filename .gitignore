@@ -84,3 +84,4 @@ site/
 ~/.protoskipper/
 register-maps/
 setup-files/
+.github/copilot-instructions.md
