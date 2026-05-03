@@ -30,6 +30,58 @@ _logger = logging.getLogger(__name__)
 _SCRIPT_LOGGER = logging.getLogger("protoskipper.script")
 
 
+# ---------------------------------------------------------------------------
+# Scripting namespace factories
+# ---------------------------------------------------------------------------
+
+
+def _make_iec104_ns(allow_writes: bool) -> Any:
+    """Return the ``iec104`` namespace for scripts / REPL.
+
+    When *allow_writes* is False the returned namespace's ``MasterSession``
+    is pre-configured with ``allow_writes=False`` so scripts cannot send
+    commands without explicit confirmation.  We do this by wrapping the class
+    rather than monkey-patching the module, to keep things clean.
+    """
+    try:
+        import types
+
+        from protoskipper.builtin_drivers.iec104.scripting import (
+            Fuzzer,
+            MasterSession,
+            PcapReader,
+            SlaveServer,
+        )
+
+        if allow_writes:
+            _MasterSession = MasterSession  # noqa: N806
+            _SlaveServer = SlaveServer  # noqa: N806
+        else:
+            # Shadow the classes so that allow_writes defaults to False and
+            # cannot be overridden without explicitly passing allow_writes=True.
+            class _MasterSession(MasterSession):  # type: ignore[no-redef]
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    kwargs.setdefault("allow_writes", False)
+                    super().__init__(*args, **kwargs)
+
+            class _SlaveServer(SlaveServer):  # type: ignore[no-redef]
+                def start(self) -> None:
+                    raise PermissionError(
+                        "SlaveServer.start() requires --allow-writes "
+                        "(or allow_in_production=True for production environments)."
+                    )
+
+        ns = types.SimpleNamespace(
+            MasterSession=_MasterSession,
+            SlaveServer=_SlaveServer,
+            PcapReader=PcapReader,
+            Fuzzer=Fuzzer,
+        )
+        return ns
+    except ImportError:
+        return None
+
+
 def _make_namespace(script_path: Path, extra_argv: list[str], allow_writes: bool) -> dict[str, Any]:
     """Build the global namespace injected into the user script."""
     ns: dict[str, Any] = {
@@ -42,18 +94,10 @@ def _make_namespace(script_path: Path, extra_argv: list[str], allow_writes: bool
     }
 
     # Inject protocol-specific helpers as top-level names (best-effort).
-    try:
-        import importlib
-
-        iec104_mod = importlib.import_module("protoskipper.builtin_drivers.iec104")
-        ns["iec104"] = iec104_mod
-    except ImportError:
-        ns["iec104"] = None
+    ns["iec104"] = _make_iec104_ns(allow_writes)
 
     try:
-        import importlib
-
-        modbus_mod = importlib.import_module("protoskipper.builtin_drivers.modbus")
+        modbus_mod = __import__("protoskipper.builtin_drivers.modbus", fromlist=[""])
         ns["modbus"] = modbus_mod
     except ImportError:
         ns["modbus"] = None

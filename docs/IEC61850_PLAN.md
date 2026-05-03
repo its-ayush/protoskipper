@@ -1,7 +1,7 @@
 # IEC 61850 — UX, Feature, and Implementation Plan
 
 > **Status:** Design document. Not yet code.
-> **Scope:** ProtoSkipper Phase 8 (per `EXECUTION_PLAN.md`).
+> **Scope:** ProtoSkipper Phase 8 (per `docs/internal/EXECUTION_PLAN.md`).
 > **Mission:** Build the IEC 61850 client/test/commissioning toolkit that
 > substation engineers actually want to keep on their laptop —
 > deliberately better than OMICRON IEDScout, kema's UniCA, Triangle MicroWorks
@@ -804,7 +804,7 @@ these.  Each becomes a Phase-8.x sub-task in the breakdown below.
 
 ## 8. Implementation task breakdown
 
-Tasks are numbered to slot into the main `EXECUTION_PLAN.md` Phase 8
+Tasks are numbered to slot into the main `docs/internal/EXECUTION_PLAN.md` Phase 8
 section.  Each follows the same schema (Goal / Files / Notes / AC /
 Tests required).  The intent is that a contributor can pick up any
 task and finish it in a single PR.
