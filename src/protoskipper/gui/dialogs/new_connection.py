@@ -93,7 +93,9 @@ class NewConnectionDialog(QDialog):
         self._baud_combo.setCurrentText("9600")
         self._baud_combo.setAccessibleName(self.tr("Baud rate"))
 
-        # ---- Common transport field: Modbus unit/slave ID ----------------
+        # ---- Common transport field: Modbus unit / IEC 104 common address
+        # The same spinbox is reused with its label/range/text reskinned
+        # depending on the selected protocol.  See :meth:`_on_protocol_changed`.
         self._unit_id_spin = QSpinBox(self)
         self._unit_id_spin.setRange(1, 247)
         self._unit_id_spin.setValue(1)
@@ -186,7 +188,8 @@ class NewConnectionDialog(QDialog):
         form.addRow(self._baud_row_label, self._baud_combo)
 
         # Common rows
-        form.addRow(self.tr("Unit ID:"), self._unit_id_spin)
+        self._unit_id_row_label = QLabel(self.tr("Unit ID:"), self)
+        form.addRow(self._unit_id_row_label, self._unit_id_spin)
         form.addRow(self.tr("Label:"), self._label_edit)
         outer.addLayout(form)
 
@@ -217,6 +220,7 @@ class NewConnectionDialog(QDialog):
         """
         proto_id: str | None = self._protocol_combo.currentData()
         is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        is_iec104 = proto_id is not None and proto_id.startswith("iec104")
 
         # TCP-specific widgets
         for w in (
@@ -235,6 +239,26 @@ class NewConnectionDialog(QDialog):
             self._baud_combo,
         ):
             w.setVisible(is_rtu)
+
+        # Reskin the unit/CA spinbox per protocol.
+        if is_iec104:
+            self._unit_id_row_label.setText(self.tr("Common address:"))
+            self._unit_id_spin.setRange(1, 65535)
+            self._unit_id_spin.setAccessibleName(
+                self.tr("IEC 60870-5-104 common address (1\u201365534)")
+            )
+            if self._tcp_port_spin.value() == 502:
+                self._tcp_port_spin.setValue(2404)
+        else:
+            self._unit_id_row_label.setText(self.tr("Unit ID:"))
+            if self._unit_id_spin.value() > 247:
+                self._unit_id_spin.setValue(1)
+            self._unit_id_spin.setRange(1, 247)
+            self._unit_id_spin.setAccessibleName(
+                self.tr("Modbus unit ID (slave address 1\u2013247)")
+            )
+            if not is_rtu and self._tcp_port_spin.value() == 2404:
+                self._tcp_port_spin.setValue(502)
 
         # Pre-fill the serial port for RTU if none is selected yet.
         if is_rtu and not self._serial_port_combo.currentText().strip():
@@ -370,7 +394,7 @@ class NewConnectionDialog(QDialog):
             self._serial_port_combo.setCurrentText(address)
         else:
             m = re.match(
-                r"^(?P<host>[^\s:/]+)(?::(?P<port>\d+))?(?:/unit=(?P<unit>\d+))?$",
+                r"^(?P<host>[^\s:/]+)(?::(?P<port>\d+))?(?:/(?:unit|ca)=(?P<unit>\d+))?$",
                 address,
             )
             if m:
@@ -391,6 +415,7 @@ class NewConnectionDialog(QDialog):
         """Read the user's choices. Only call after :meth:`exec` returned Accepted."""
         proto_id: str = self._protocol_combo.currentData()
         is_rtu = "rtu" in proto_id.lower()
+        is_iec104 = proto_id.startswith("iec104")
         unit = self._unit_id_spin.value()
         if is_rtu:
             port = self._serial_port_combo.currentText().strip()
@@ -399,7 +424,10 @@ class NewConnectionDialog(QDialog):
         else:
             host = self._host_edit.text().strip()
             tcp_port = self._tcp_port_spin.value()
-            address = f"{host}:{tcp_port}/unit={unit}"
+            if is_iec104:
+                address = f"{host}:{tcp_port}/ca={unit}"
+            else:
+                address = f"{host}:{tcp_port}/unit={unit}"
         profile_value = self._profile_group.checkedButton().property("profile")
         profile = SessionProfile(profile_value)
         return ConnectionRequest(
