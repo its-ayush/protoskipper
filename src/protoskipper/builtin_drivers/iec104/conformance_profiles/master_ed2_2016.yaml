@@ -1,0 +1,72 @@
+# IEC 60870-5-104 Ed.2 + 2016/A1 Master Conformance Profile
+# Aligned with IEC 60870-5-104:2006/A1:2016.
+#
+# Tests in this profile verify that the ProtoSkipper master client
+# conforms to the standard when communicating with any IEC 104 slave.
+
+id: master_ed2_2016
+display_name: "Master — IEC 60870-5-104 Ed.2 + 2016/A1"
+direction: master
+edition: "2.0+A1"
+profiles_allowed:
+  - lab
+  - commissioning
+
+tests:
+  - key: gi
+    label: "General Interrogation (GI) — C_IC_NA_1"
+    description: >
+      Sends C_IC_NA_1 (type 100) with QOI=20 (Global) COT=6 (activation).
+      Expects ACT-CON (COT=7) followed by object ASDUs with COT=20 (GI response)
+      and terminates on ACT-TERM (COT=10).
+    timeout_s: 60
+    mandatory: true
+
+  - key: ci
+    label: "Counter Interrogation (CI) — C_CI_NA_1"
+    description: >
+      Sends C_CI_NA_1 (type 101) with QCC=5 (Global, freeze+reset) COT=6.
+      Expects ACT-CON (COT=7) and ACT-TERM (COT=10) with counter values COT=37.
+    timeout_s: 30
+    mandatory: false
+
+  - key: clock_sync
+    label: "Clock Synchronisation — C_CS_NA_1"
+    description: >
+      Sends C_CS_NA_1 (type 103) with current UTC time COT=6.
+      Expects ACT-CON (COT=7) within T1.
+    timeout_s: 10
+    mandatory: true
+
+  - key: testfr
+    label: "TESTFR Keep-Alive"
+    description: >
+      After T3 seconds of inactivity the master sends TESTFR ACT.
+      Expects TESTFR CON within T1.  The connection must remain open.
+    timeout_s: 60
+    mandatory: true
+
+  - key: read_single
+    label: "Single IOA Read — C_RD_NA_1"
+    description: >
+      Sends C_RD_NA_1 (type 102) for the first IOA from the point list.
+      Expects the slave to respond with the value COT=5 (request).
+    timeout_s: 10
+    mandatory: false
+
+  - key: gi_conformance
+    label: "GI Data Quality Check"
+    description: >
+      After a successful GI, every returned IOA must carry quality flags = 0
+      (no IV, NT, SB, BL, OV, EI bits set) unless the slave is known to
+      set NT on stale points.
+    timeout_s: 60
+    mandatory: false
+
+  - key: kw_window
+    label: "k/w Sliding-Window Compliance"
+    description: >
+      Master sends k+1 I-frames without waiting for S-frame ACK.
+      The (k+1)-th I-frame must be deferred until the slave advances the window.
+    timeout_s: 30
+    mandatory: true

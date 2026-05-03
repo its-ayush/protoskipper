@@ -1,0 +1,24 @@
+# ZIV 5CTD (Telecontrol Gateway) — IEC 60870-5-104 profile
+id: ziv_5ctd
+display_name: "ZIV 5CTD Telecontrol Gateway"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 8
+w: 6
+t0: 60
+t1: 30
+t2: 10
+t3: 30
+quirks:
+  - "ziv-slow-gi"          # GI may take 30-60 s on first query; increase t1 accordingly
+  - "ziv-no-file-transfer"  # File transfer (F_* ASDUs) not implemented
+  - "ziv-multi-ca"          # Multiple CA values routed by this gateway; connect once per CA
+notes: >
+  ZIV 5CTD is a concentrator/gateway device that may aggregate multiple RTUs.
+  Each upstream RTU appears as a separate Common Address; open one TCP
+  connection per CA.
+  GI timing can be slow (30-60 s) for large point lists — set t1 ≥ 30 s.
+  File transfer is not supported; do not attempt F_SC_NA_1.
+  k=8/w=6 reduces buffering pressure on the embedded CPU.

@@ -79,6 +79,11 @@ class SessionManager(QObject):
     def available_protocols(self) -> dict[str, type[ProtocolDriver]]:
         return load_protocol_drivers()
 
+    @property
+    def active_workers(self) -> dict[SessionId, DriverWorker]:
+        """Snapshot of active session workers (GUI-thread read-only view)."""
+        return {sid: h.worker for sid, h in self._workers.items()}
+
     # ---- discovery (transient worker, no session) ------------------------
 
     def start_discovery(self, protocol_id: str, target: str) -> SessionId:

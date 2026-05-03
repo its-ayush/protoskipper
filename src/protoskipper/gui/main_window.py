@@ -40,6 +40,16 @@ from protoskipper.core.audit import verify_log
 from protoskipper.core.capture.pcapng import read_pcapng
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
+from protoskipper.core.setup import (
+    Iec104Setup,
+    SetupError,
+)
+from protoskipper.core.setup import (
+    load as load_iec104_setup,
+)
+from protoskipper.core.setup import (
+    save as save_iec104_setup,
+)
 from protoskipper.gui.dialogs import (
     AuditViewDialog,
     Iec104CommandDialog,
@@ -60,6 +70,7 @@ from protoskipper.gui.panels import (
     Iec104TimeSyncPanel,
     ObjectBrowserPanel,
     PacketViewPanel,
+    ScriptingConsolePanel,
     SessionStatusPanel,
     SoePanel,
     WatchlistPanel,
@@ -304,6 +315,22 @@ class MainWindow(QMainWindow):
         self._action_iec104_conformance.triggered.connect(self._open_iec104_conformance_dialog)
         iec104_menu.addAction(self._action_iec104_conformance)
 
+        iec104_menu.addSeparator()
+
+        self._action_iec104_save_setup = QAction(self.tr("Save IEC\u00a0104 Setup\u2026"), self)
+        self._action_iec104_save_setup.setToolTip(
+            "Save IEC\u00a0104 connection settings to an iec104-setup.json file"
+        )
+        self._action_iec104_save_setup.triggered.connect(self._save_iec104_setup)
+        iec104_menu.addAction(self._action_iec104_save_setup)
+
+        self._action_iec104_load_setup = QAction(self.tr("Load IEC\u00a0104 Setup\u2026"), self)
+        self._action_iec104_load_setup.setToolTip(
+            "Load IEC\u00a0104 connection settings from an iec104-setup.json file"
+        )
+        self._action_iec104_load_setup.triggered.connect(self._load_iec104_setup)
+        iec104_menu.addAction(self._action_iec104_load_setup)
+
         # P3.D View menu — Theme + Density
         self._action_theme_light = QAction(self.tr("&Light"), self)
         self._action_theme_light.setCheckable(True)
@@ -481,6 +508,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_bottom)
         self._dock_sessions = dock_right_bottom
 
+        # ---- bottom: scripting console (hidden by default) ----
+        self._scripting_console = ScriptingConsolePanel(self._state, self._session_manager, self)
+        dock_console = QDockWidget("Scripting Console", self)
+        dock_console.setObjectName("ScriptingConsoleDock")
+        dock_console.setWidget(self._scripting_console)
+        dock_console.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_console)
+        dock_console.hide()  # off by default; View → Panels → Scripting Console to show
+        self._dock_console = dock_console
+
     def _build_panel_view_actions(self) -> None:
         """Add dock-panel toggle actions to View → Panels so closed panels can be reopened."""
         view_menu = self.menuBar().findChild(type(self.menuBar().actions()[0].menu()), "")
@@ -498,6 +537,7 @@ class MainWindow(QMainWindow):
         panels_submenu.addAction(self._dock_watchlist.toggleViewAction())
         panels_submenu.addAction(self._dock_sessions.toggleViewAction())
         panels_submenu.addAction(self._dock_soe.toggleViewAction())
+        panels_submenu.addAction(self._dock_console.toggleViewAction())
         view_menu.addSeparator()
         restore_action = view_menu.addAction(self.tr("Restore default layout"))
         restore_action.triggered.connect(self._restore_default_layout)
@@ -977,7 +1017,91 @@ class MainWindow(QMainWindow):
         )
         dlg.exec()
 
-    # ---- P3.A.2 Preferences --------------------------------------------
+    def _save_iec104_setup(self) -> None:
+        """Tools → IEC 104 → Save IEC 104 Setup… — write an iec104-setup.json."""
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        Path(default_dir).mkdir(parents=True, exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Save IEC\u00a0104 Setup"),
+            default_dir,
+            "IEC\u00a0104 Setup files (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if not path.suffix:
+            path = path.with_suffix(".json")
+
+        # Populate from the active session (if any).
+        setup = Iec104Setup(name=path.stem)
+        sid = self._active_session_id()
+        if sid is not None:
+            info = self._state.session(sid)
+            if info is not None:
+                setup.operator = info.operator
+                setup.profile = info.profile.value
+                if info.device.protocol.startswith("iec104"):
+                    setup.connection.host = info.device.address.split(":")[0]
+                    import contextlib
+
+                    with contextlib.suppress(IndexError, ValueError):
+                        setup.connection.port = int(info.device.address.split(":")[1].split("/")[0])
+
+        try:
+            save_iec104_setup(setup, path)
+        except SetupError as exc:
+            QMessageBox.critical(self, self.tr("Save failed"), str(exc))
+            return
+        self.statusBar().showMessage(
+            self.tr("IEC\u00a0104 setup saved to {name}").format(name=path.name), 5000
+        )
+
+    def _load_iec104_setup(self) -> None:
+        """Tools → IEC 104 → Load IEC 104 Setup… — read and apply an iec104-setup.json."""
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Load IEC\u00a0104 Setup"),
+            default_dir,
+            "IEC\u00a0104 Setup files (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        try:
+            setup = load_iec104_setup(path_str)
+        except SetupError as exc:
+            QMessageBox.critical(self, self.tr("Load failed"), str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("Load failed"),
+                self.tr("Could not parse setup file: {e}").format(e=exc),
+            )
+            return
+
+        # Show confirmation with loaded parameters, then open new-connection dialog.
+        QMessageBox.information(
+            self,
+            self.tr("IEC\u00a0104 Setup Loaded"),
+            self.tr(
+                "Setup <b>{name}</b> loaded.\n\n"
+                "Host: {host}:{port}\n"
+                "Vendor profile: {profile}\n\n"
+                "Click OK, then use <i>New Connection\u2026</i> to connect."
+            ).format(
+                name=Path(path_str).stem,
+                host=setup.connection.host,
+                port=setup.connection.port,
+                profile=setup.vendor_profile,
+            ),
+        )
+        self._open_new_connection_dialog()
+        self.statusBar().showMessage(
+            self.tr("IEC\u00a0104 setup loaded from {name}").format(name=Path(path_str).name),
+            5000,
+        )
 
     def _on_preferences(self) -> None:
         """Tools → Preferences…"""
@@ -1337,4 +1461,7 @@ class MainWindow(QMainWindow):
             self._session_manager.shutdown()
         except Exception:
             _logger.exception("Error during SessionManager shutdown; closing anyway")
+        # Stop the scripting console worker thread before Qt starts destroying
+        # child C++ objects; failing to do this causes an abort on macOS.
+        self._scripting_console._stop_thread()
         super().closeEvent(event)

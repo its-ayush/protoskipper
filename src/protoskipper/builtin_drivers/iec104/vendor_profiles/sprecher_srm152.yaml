@@ -1,0 +1,23 @@
+# Sprecher Automation SRM-152 RTU — IEC 60870-5-104 profile
+id: sprecher_srm152
+display_name: "Sprecher Automation SRM-152 RTU"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 30
+t1: 15
+t2: 10
+t3: 20
+quirks:
+  - "sprecher-ioa2-mode"    # Uses 2-byte IOA addresses when ioa_size=2 is configured in RTU
+  - "sprecher-oa-echo"      # OA in outgoing commands is echoed back in CONs; assert on mismatch
+notes: >
+  Sprecher SRM-152 RTU tested against firmware 2.x.
+  The RTU can be configured for 2-byte or 3-byte IOA addressing; match the
+  ioa_size parameter to the RTU's station configuration.
+  If OA (Originator Address) is non-zero, the RTU echoes it in confirmation
+  ASDUs — useful for multiplexed master stations.
+  Both TLS and plain TCP are supported; TLS requires IEC 62351-3 certificates.
