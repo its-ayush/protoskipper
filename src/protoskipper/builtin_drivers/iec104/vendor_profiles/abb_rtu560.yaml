@@ -1,0 +1,20 @@
+# ABB RTU560 IEC 60870-5-104 profile
+id: abb_rtu560
+display_name: "ABB RTU560"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 15
+w: 10
+t0: 30
+t1: 15
+t2: 10
+t3: 30
+quirks:
+  - "no_testfr_con"    # RTU560 does not always send TESTFR CON; do not fail on missing
+  - "gi_ack_only"      # GI complete signalled by ACTTERM only (no intermediate ACT)
+notes: >
+  ABB RTU560 firmware up to 7.x may not reply to TESTFR (keep-alive);
+  set t3 > 30 s to avoid spurious disconnects.
+  CA must match the RTU560 station address configured in SPA-Bus.

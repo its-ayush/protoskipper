@@ -1,0 +1,20 @@
+# Siemens SINAUT / SICAM IEC 60870-5-104 profile
+id: siemens
+display_name: "Siemens SINAUT / SICAM"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 10
+w: 7
+t0: 30
+t1: 10
+t2: 5
+t3: 20
+quirks:
+  - "cot_2byte_always"  # always sends 2-byte COT even in 1-byte mode
+  - "ci_group5_only"    # counter interrogation supports group 5 (global) only
+notes: >
+  Siemens SICAM A8000 / SINAUT ST7 line.
+  Some older firmware revisions ignore QOI != 20 (Global GI only).
+  Use profile=commissioning to enable Reset Process.
