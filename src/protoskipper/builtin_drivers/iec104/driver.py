@@ -108,13 +108,15 @@ def _data_type_for(type_id: TypeID) -> str:
         return "boolean"
     if type_id in {TypeID.M_DP_NA_1, TypeID.M_DP_TB_1, TypeID.C_DC_NA_1}:
         return "double-point"
-    if type_id in {TypeID.M_ME_NA_1, TypeID.M_ME_NB_1}:
+    if type_id in {TypeID.M_ME_NA_1, TypeID.M_ME_NB_1, TypeID.C_SE_NA_1, TypeID.C_SE_NB_1}:
         return "int16"
-    if type_id in {TypeID.M_ME_NC_1, TypeID.M_ME_TF_1}:
+    if type_id in {TypeID.M_ME_NC_1, TypeID.M_ME_TF_1, TypeID.C_SE_NC_1}:
         return "float32"
-    if type_id is TypeID.M_EI_NA_1:
-        return "uint8"
-    if type_id is TypeID.C_IC_NA_1:
+    if type_id in {TypeID.M_BO_NA_1, TypeID.M_BO_TB_1, TypeID.C_BO_NA_1}:
+        return "bitstring32"
+    if type_id in {TypeID.M_IT_NA_1, TypeID.M_IT_TB_1}:
+        return "counter"
+    if type_id in {TypeID.M_EI_NA_1, TypeID.C_IC_NA_1, TypeID.C_CI_NA_1}:
         return "uint8"
     if type_id is TypeID.C_RD_NA_1:
         return "any"
@@ -313,46 +315,110 @@ class _Iec104Session(DriverSession):
     # ---- write ----------------------------------------------------------
     def prepare_write(self, ref: ObjectRef, value: Any) -> WriteIntent:
         type_id, ioa = _parse_object_id(ref.object_id)
-        if type_id is TypeID.C_SC_NA_1:
-            description = f"Single command IOA={ioa} -> {'ON' if value else 'OFF'}"
-            from protoskipper.builtin_drivers.iec104 import asdu as asdu_mod
+        # Allow callers to opt into Select-Before-Operate by passing a
+        # 2-tuple ``(value, {"select": True})`` or a dict with key 'value'.
+        select = False
+        ql = 0
+        actual_value: Any = value
+        if isinstance(value, dict) and "value" in value:
+            actual_value = value["value"]
+            select = bool(value.get("select", False))
+            ql = int(value.get("ql", value.get("qu", 0)))
+        from protoskipper.builtin_drivers.iec104 import asdu as asdu_mod
 
-            encoded = asdu_mod.build_single_command(self._ca, ioa, bool(value))
+        if type_id is TypeID.C_SC_NA_1:
+            on = bool(actual_value)
+            description = (
+                f"Single command IOA={ioa} -> {'ON' if on else 'OFF'}"
+                f"{' (SELECT)' if select else ''}"
+            )
+            encoded = asdu_mod.build_single_command(self._ca, ioa, on, select=select, qu=ql)
         elif type_id is TypeID.C_DC_NA_1:
-            dcs = int(value)
+            dcs = int(actual_value)
             if dcs not in (1, 2):
                 raise EncodingError(f"Double command DCS must be 1 or 2, got {dcs}")
-            description = f"Double command IOA={ioa} -> {'ON' if dcs == 2 else 'OFF'}"
-            from protoskipper.builtin_drivers.iec104 import asdu as asdu_mod
-
-            encoded = asdu_mod.build_double_command(self._ca, ioa, dcs)
+            description = (
+                f"Double command IOA={ioa} -> {'ON' if dcs == 2 else 'OFF'}"
+                f"{' (SELECT)' if select else ''}"
+            )
+            encoded = asdu_mod.build_double_command(self._ca, ioa, dcs, select=select, qu=ql)
+        elif type_id is TypeID.C_SE_NA_1:
+            description = (
+                f"Set-point (normalised) IOA={ioa} -> {actual_value}{' (SELECT)' if select else ''}"
+            )
+            encoded = asdu_mod.build_set_point_normalised(
+                self._ca, ioa, int(actual_value), select=select, ql=ql
+            )
+        elif type_id is TypeID.C_SE_NB_1:
+            description = (
+                f"Set-point (scaled) IOA={ioa} -> {actual_value}{' (SELECT)' if select else ''}"
+            )
+            encoded = asdu_mod.build_set_point_scaled(
+                self._ca, ioa, int(actual_value), select=select, ql=ql
+            )
+        elif type_id is TypeID.C_SE_NC_1:
+            description = (
+                f"Set-point (float) IOA={ioa} -> {actual_value}{' (SELECT)' if select else ''}"
+            )
+            encoded = asdu_mod.build_set_point_float(
+                self._ca, ioa, float(actual_value), select=select, ql=ql
+            )
+        elif type_id is TypeID.C_BO_NA_1:
+            description = f"Bitstring command IOA={ioa} -> {int(actual_value):#010x}"
+            encoded = asdu_mod.build_bitstring_command(self._ca, ioa, int(actual_value))
         elif type_id is TypeID.C_CS_NA_1:
-            ts = value if isinstance(value, datetime) else datetime.now(tz=timezone.utc)
+            ts = (
+                actual_value
+                if isinstance(actual_value, datetime)
+                else datetime.now(tz=timezone.utc)
+            )
             description = f"Clock sync -> {ts.isoformat()}"
-            from protoskipper.builtin_drivers.iec104 import asdu as asdu_mod
-
             encoded = asdu_mod.build_clock_sync(self._ca, ts)
         else:
-            raise UnsupportedOperation(
-                f"Write not supported for type {type_id.name} (only single/double/clock-sync)"
-            )
+            raise UnsupportedOperation(f"Write not supported for type {type_id.name}")
         return WriteIntent(
             object_ref=ref,
-            requested_value=value,
+            requested_value=actual_value,
             encoded_bytes=encoded,
             description=description,
-            metadata={"ca": self._ca, "ioa": ioa, "type": type_id.name},
+            metadata={
+                "ca": self._ca,
+                "ioa": ioa,
+                "type": type_id.name,
+                "select": select,
+                "ql": ql,
+            },
         )
 
     def commit_write(self, intent: WriteIntent) -> WriteResult:
         if not self.safety.require_write_authorization(intent):
             raise AuthorizationDenied(intent.description)
         type_id, ioa = _parse_object_id(intent.object_ref.object_id)
+        select = bool(intent.metadata.get("select", False))
+        ql = int(intent.metadata.get("ql", 0))
         try:
             if type_id is TypeID.C_SC_NA_1:
-                reply = self._master.single_command(ioa, bool(intent.requested_value))
+                reply = self._master.single_command(
+                    ioa, bool(intent.requested_value), select=select, qu=ql
+                )
             elif type_id is TypeID.C_DC_NA_1:
-                reply = self._master.double_command(ioa, int(intent.requested_value))
+                reply = self._master.double_command(
+                    ioa, int(intent.requested_value), select=select, qu=ql
+                )
+            elif type_id is TypeID.C_SE_NA_1:
+                reply = self._master.set_point_normalised(
+                    ioa, int(intent.requested_value), select=select, ql=ql
+                )
+            elif type_id is TypeID.C_SE_NB_1:
+                reply = self._master.set_point_scaled(
+                    ioa, int(intent.requested_value), select=select, ql=ql
+                )
+            elif type_id is TypeID.C_SE_NC_1:
+                reply = self._master.set_point_float(
+                    ioa, float(intent.requested_value), select=select, ql=ql
+                )
+            elif type_id is TypeID.C_BO_NA_1:
+                reply = self._master.bitstring_command(ioa, int(intent.requested_value))
             elif type_id is TypeID.C_CS_NA_1:
                 ts = (
                     intent.requested_value

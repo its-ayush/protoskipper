@@ -31,6 +31,7 @@ from protoskipper.builtin_drivers.iec104.apci import (
 from protoskipper.builtin_drivers.iec104.asdu import (
     COT,
     Asdu,
+    BinaryCounter,
     InformationObject,
     Quality,
     TypeID,
@@ -45,6 +46,15 @@ class MiniSlave:
     def __init__(self, ca: int = 1, value: float = 230.5) -> None:
         self.ca = ca
         self.value = value
+        # Counter values returned for C_CI_NA_1 (counter interrogation).
+        self.counters: dict[int, BinaryCounter] = {
+            7001: BinaryCounter(count=12345, sequence=1),
+            7002: BinaryCounter(count=67890, sequence=2),
+        }
+        # Last accepted set-point per IOA — tests can inspect.
+        self.set_points: dict[int, object] = {}
+        # Last accepted bitstring command per IOA.
+        self.bitstrings: dict[int, int] = {}
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.bind(("127.0.0.1", 0))
         self._sock.listen(1)
@@ -172,11 +182,72 @@ class MiniSlave:
                 ),
             )
         elif req.type_id in (TypeID.C_SC_NA_1, TypeID.C_DC_NA_1):
+            # SBO commands: same ACTCON for both select and execute phases.
+            # Real RTUs differentiate, but the mini-slave just confirms.
             self._send_i(
                 client,
                 Asdu(
                     type_id=req.type_id,
                     cot=COT.ACTCON,
+                    ca=self.ca,
+                    objects=req.objects,
+                ),
+            )
+        elif req.type_id in (TypeID.C_SE_NA_1, TypeID.C_SE_NB_1, TypeID.C_SE_NC_1):
+            # Record the set-point (only on execute phase, i.e. select=False).
+            obj = req.objects[0]
+            if not obj.select:
+                self.set_points[obj.ioa] = obj.value
+            self._send_i(
+                client,
+                Asdu(
+                    type_id=req.type_id,
+                    cot=COT.ACTCON,
+                    ca=self.ca,
+                    objects=req.objects,
+                ),
+            )
+        elif req.type_id is TypeID.C_BO_NA_1:
+            obj = req.objects[0]
+            self.bitstrings[obj.ioa] = int(obj.value)
+            self._send_i(
+                client,
+                Asdu(
+                    type_id=TypeID.C_BO_NA_1,
+                    cot=COT.ACTCON,
+                    ca=self.ca,
+                    objects=req.objects,
+                ),
+            )
+        elif req.type_id is TypeID.C_CI_NA_1:
+            # ACTCON
+            self._send_i(
+                client,
+                Asdu(
+                    type_id=TypeID.C_CI_NA_1,
+                    cot=COT.ACTCON,
+                    ca=self.ca,
+                    objects=req.objects,
+                ),
+            )
+            # M_IT_NA_1 with each counter
+            self._send_i(
+                client,
+                Asdu(
+                    type_id=TypeID.M_IT_NA_1,
+                    cot=COT.REQCOGEN,
+                    ca=self.ca,
+                    objects=[
+                        InformationObject(ioa=ioa, value=bcr) for ioa, bcr in self.counters.items()
+                    ],
+                ),
+            )
+            # ACTTERM
+            self._send_i(
+                client,
+                Asdu(
+                    type_id=TypeID.C_CI_NA_1,
+                    cot=COT.ACTTERM,
                     ca=self.ca,
                     objects=req.objects,
                 ),

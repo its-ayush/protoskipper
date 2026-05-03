@@ -317,8 +317,11 @@ class Iec104MasterSession:
         ioa: int,
         on: bool,
         timeout: float | None = None,
+        *,
+        select: bool = False,
+        qu: int = 0,
     ) -> Asdu:
-        body = asdu.build_single_command(self._cfg.ca, ioa, on)
+        body = asdu.build_single_command(self._cfg.ca, ioa, on, select=select, qu=qu)
         return self._issue_command(body, ioa, TypeID.C_SC_NA_1, timeout)
 
     def double_command(
@@ -326,9 +329,95 @@ class Iec104MasterSession:
         ioa: int,
         dcs: int,
         timeout: float | None = None,
+        *,
+        select: bool = False,
+        qu: int = 0,
     ) -> Asdu:
-        body = asdu.build_double_command(self._cfg.ca, ioa, dcs)
+        body = asdu.build_double_command(self._cfg.ca, ioa, dcs, select=select, qu=qu)
         return self._issue_command(body, ioa, TypeID.C_DC_NA_1, timeout)
+
+    def set_point_normalised(
+        self,
+        ioa: int,
+        value: int,
+        timeout: float | None = None,
+        *,
+        select: bool = False,
+        ql: int = 0,
+    ) -> Asdu:
+        body = asdu.build_set_point_normalised(self._cfg.ca, ioa, value, select=select, ql=ql)
+        return self._issue_command(body, ioa, TypeID.C_SE_NA_1, timeout)
+
+    def set_point_scaled(
+        self,
+        ioa: int,
+        value: int,
+        timeout: float | None = None,
+        *,
+        select: bool = False,
+        ql: int = 0,
+    ) -> Asdu:
+        body = asdu.build_set_point_scaled(self._cfg.ca, ioa, value, select=select, ql=ql)
+        return self._issue_command(body, ioa, TypeID.C_SE_NB_1, timeout)
+
+    def set_point_float(
+        self,
+        ioa: int,
+        value: float,
+        timeout: float | None = None,
+        *,
+        select: bool = False,
+        ql: int = 0,
+    ) -> Asdu:
+        body = asdu.build_set_point_float(self._cfg.ca, ioa, value, select=select, ql=ql)
+        return self._issue_command(body, ioa, TypeID.C_SE_NC_1, timeout)
+
+    def bitstring_command(
+        self,
+        ioa: int,
+        value: int,
+        timeout: float | None = None,
+    ) -> Asdu:
+        body = asdu.build_bitstring_command(self._cfg.ca, ioa, value)
+        return self._issue_command(body, ioa, TypeID.C_BO_NA_1, timeout)
+
+    def counter_interrogation(
+        self,
+        rqt: int = asdu.QCC_RQT_GENERAL,
+        frz: int = asdu.QCC_FRZ_READ,
+        timeout: float | None = None,
+    ) -> list[Asdu]:
+        """Issue C_CI_NA_1 and collect M_IT_* replies until ACTTERM."""
+        body = asdu.build_counter_interrogation(self._cfg.ca, rqt=rqt, frz=frz)
+        ca = self._cfg.ca
+        replies: list[Asdu] = []
+        completed = threading.Event()
+
+        def predicate(a: Asdu) -> bool:
+            if a.ca != ca:
+                return False
+            if a.type_id in (TypeID.M_IT_NA_1, TypeID.M_IT_TB_1):
+                return True
+            return a.type_id is TypeID.C_CI_NA_1
+
+        def is_terminator(a: Asdu) -> bool:
+            return a.type_id is TypeID.C_CI_NA_1 and a.cot is COT.ACTTERM
+
+        req = PendingRequest(
+            predicate=predicate,
+            replies=replies,
+            event=completed,
+            multi=True,
+            terminator=is_terminator,
+        )
+        with self._state_lock:
+            self._pending.append(req)
+        self._send_i(body)
+        wait_t = timeout if timeout is not None else max(self._cfg.t1 * 4, 60.0)
+        if not completed.wait(timeout=wait_t):
+            self._cancel_pending(req)
+            raise ConnectionFailure("Counter interrogation did not complete within timeout")
+        return replies
 
     def clock_sync(self, ts: datetime | None = None, timeout: float | None = None) -> Asdu:
         ts = ts or datetime.now(tz=timezone.utc)
@@ -597,6 +686,7 @@ class Iec104MasterSession:
     def _dispatch_asdu(self, a: Asdu) -> None:
         # First, check pending request matchers.
         completed: list[PendingRequest] = []
+        matched = False
         with self._state_lock:
             for req in self._pending:
                 if req.predicate(a):
@@ -608,18 +698,22 @@ class Iec104MasterSession:
                     else:
                         req.event.set()
                         completed.append(req)
-                    return
-            # Spontaneous / unsolicited
+                    matched = True
+                    break
+            # Drain completed pendings while we still hold the lock so that a
+            # follow-up command on the same IOA does not collide with a stale
+            # entry whose event is already set.
+            for req in completed:
+                if req in self._pending:
+                    self._pending.remove(req)
+        if matched:
+            return
+        # Spontaneous / unsolicited
         if self._spont_listener is not None:
             try:
                 self._spont_listener(a)
             except Exception:  # pragma: no cover - listener failures are non-fatal
                 _logger.debug("spontaneous listener raised", exc_info=True)
-        # Drain completed pendings
-        with self._state_lock:
-            for req in completed:
-                if req in self._pending:
-                    self._pending.remove(req)
 
     def _cancel_pending(self, req: PendingRequest) -> None:
         with self._state_lock:

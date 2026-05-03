@@ -44,16 +44,25 @@ class TypeID(IntEnum):
 
     M_SP_NA_1 = 1  # single point info, no time tag
     M_DP_NA_1 = 3  # double point info, no time tag
+    M_BO_NA_1 = 7  # bitstring 32 bit, no time tag
     M_ME_NA_1 = 9  # measured value, normalised, no time tag
     M_ME_NB_1 = 11  # measured value, scaled, no time tag
     M_ME_NC_1 = 13  # measured value, short float, no time tag
+    M_IT_NA_1 = 15  # integrated totals (BCR), no time tag
     M_SP_TB_1 = 30  # single point info with CP56Time2a
     M_DP_TB_1 = 31  # double point info with CP56Time2a
+    M_BO_TB_1 = 33  # bitstring 32 bit with CP56Time2a
     M_ME_TF_1 = 36  # measured value, short float, with CP56Time2a
+    M_IT_TB_1 = 37  # integrated totals with CP56Time2a
     C_SC_NA_1 = 45  # single command
     C_DC_NA_1 = 46  # double command
+    C_SE_NA_1 = 48  # set point command, normalised
+    C_SE_NB_1 = 49  # set point command, scaled
+    C_SE_NC_1 = 50  # set point command, short float
+    C_BO_NA_1 = 51  # bitstring 32 bit command
     M_EI_NA_1 = 70  # end of initialisation
     C_IC_NA_1 = 100  # interrogation command
+    C_CI_NA_1 = 101  # counter interrogation command
     C_RD_NA_1 = 102  # read command
     C_CS_NA_1 = 103  # clock synchronisation command
 
@@ -93,6 +102,19 @@ QOI_GROUP_1 = 21  # ... up to 36 for groups 1..16
 # Single command qualifiers
 SCO_EXEC = 0x00
 SCO_SELECT = 0x80  # SE bit
+
+# Counter interrogation command qualifier (QCC) - bits 0..5 RQT, 6..7 FRZ
+QCC_RQT_GENERAL = 5  # general request counter
+QCC_RQT_GROUP_1 = 1  # group 1 .. group 4 (1..4)
+QCC_FRZ_READ = 0
+QCC_FRZ_FREEZE_NORESET = 1
+QCC_FRZ_FREEZE_RESET = 2
+QCC_FRZ_RESET = 3
+
+# BCR (Binary Counter Reading) flag bits in the trailing sequence byte
+BCR_CY = 0x20  # carry
+BCR_CA = 0x40  # counter adjusted
+BCR_IV = 0x80  # invalid
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +281,41 @@ def decode_qds(b: int) -> Quality:
 
 
 @dataclass
+class BinaryCounter:
+    """Decoded BCR (Binary Counter Reading) - M_IT_* payload."""
+
+    count: int  # signed 32-bit
+    sequence: int = 0  # 5-bit free-running sequence number
+    carry: bool = False
+    adjusted: bool = False
+    invalid: bool = False
+
+    def to_bytes(self) -> bytes:
+        seq = self.sequence & 0x1F
+        if self.carry:
+            seq |= BCR_CY
+        if self.adjusted:
+            seq |= BCR_CA
+        if self.invalid:
+            seq |= BCR_IV
+        return struct.pack("<i", self.count) + bytes([seq])
+
+    @classmethod
+    def from_bytes(cls, buf: bytes) -> BinaryCounter:
+        if len(buf) < 5:
+            raise EncodingError(f"BCR needs 5 bytes, got {len(buf)}")
+        (count,) = struct.unpack("<i", buf[0:4])
+        seq = buf[4]
+        return cls(
+            count=count,
+            sequence=seq & 0x1F,
+            carry=bool(seq & BCR_CY),
+            adjusted=bool(seq & BCR_CA),
+            invalid=bool(seq & BCR_IV),
+        )
+
+
+@dataclass
 class InformationObject:
     """One IOA + payload tuple inside an ASDU."""
 
@@ -267,6 +324,8 @@ class InformationObject:
     quality: Quality | None = None
     timestamp: datetime | None = None
     raw_element: bytes = b""  # original element bytes (without IOA)
+    select: bool = False  # SE bit on SCO/DCO/QOS for SBO commands
+    qu: int = 0  # qualifier of command (5 bits) - SCO/DCO QU field, or QOS QL
 
 
 @dataclass
@@ -290,16 +349,25 @@ class Asdu:
 _ELEMENT_SIZES: dict[int, int] = {
     TypeID.M_SP_NA_1: 1,
     TypeID.M_DP_NA_1: 1,
+    TypeID.M_BO_NA_1: 5,  # BSI(4) + QDS(1)
     TypeID.M_ME_NA_1: 3,  # NVA(2) + QDS(1)
     TypeID.M_ME_NB_1: 3,  # SVA(2) + QDS(1)
     TypeID.M_ME_NC_1: 5,  # float(4) + QDS(1)
+    TypeID.M_IT_NA_1: 5,  # BCR(5)
     TypeID.M_SP_TB_1: 8,  # SIQ(1) + CP56(7)
     TypeID.M_DP_TB_1: 8,  # DIQ(1) + CP56(7)
+    TypeID.M_BO_TB_1: 12,  # BSI(4) + QDS(1) + CP56(7)
     TypeID.M_ME_TF_1: 12,  # float(4) + QDS(1) + CP56(7)
+    TypeID.M_IT_TB_1: 12,  # BCR(5) + CP56(7)
     TypeID.C_SC_NA_1: 1,  # SCO
     TypeID.C_DC_NA_1: 1,  # DCO
+    TypeID.C_SE_NA_1: 3,  # NVA(2) + QOS(1)
+    TypeID.C_SE_NB_1: 3,  # SVA(2) + QOS(1)
+    TypeID.C_SE_NC_1: 5,  # float(4) + QOS(1)
+    TypeID.C_BO_NA_1: 4,  # BSI(4) - no QDS on commands
     TypeID.M_EI_NA_1: 1,  # COI
     TypeID.C_IC_NA_1: 1,  # QOI
+    TypeID.C_CI_NA_1: 1,  # QCC
     TypeID.C_RD_NA_1: 0,  # no element
     TypeID.C_CS_NA_1: 7,  # CP56Time2a
 }
@@ -322,6 +390,10 @@ def _encode_element(type_id: TypeID, obj: InformationObject) -> bytes:
         return bytes([encode_siq(bool(obj.value), obj.quality or Quality())])
     if type_id is TypeID.M_DP_NA_1:
         return bytes([encode_diq(int(obj.value), obj.quality or Quality())])
+    if type_id is TypeID.M_BO_NA_1:
+        return struct.pack("<I", int(obj.value) & 0xFFFFFFFF) + bytes(
+            [encode_qds(obj.quality or Quality())]
+        )
     if type_id is TypeID.M_ME_NA_1:
         nva = int(obj.value) & 0xFFFF
         return struct.pack("<h", _to_signed16(nva)) + bytes([encode_qds(obj.quality or Quality())])
@@ -329,6 +401,9 @@ def _encode_element(type_id: TypeID, obj: InformationObject) -> bytes:
         return struct.pack("<h", int(obj.value)) + bytes([encode_qds(obj.quality or Quality())])
     if type_id is TypeID.M_ME_NC_1:
         return struct.pack("<f", float(obj.value)) + bytes([encode_qds(obj.quality or Quality())])
+    if type_id is TypeID.M_IT_NA_1:
+        bcr = obj.value if isinstance(obj.value, BinaryCounter) else BinaryCounter(int(obj.value))
+        return bcr.to_bytes()
     if type_id is TypeID.M_SP_TB_1:
         ts = obj.timestamp or datetime.now(tz=timezone.utc)
         return bytes([encode_siq(bool(obj.value), obj.quality or Quality())]) + encode_cp56time2a(
@@ -337,6 +412,13 @@ def _encode_element(type_id: TypeID, obj: InformationObject) -> bytes:
     if type_id is TypeID.M_DP_TB_1:
         ts = obj.timestamp or datetime.now(tz=timezone.utc)
         return bytes([encode_diq(int(obj.value), obj.quality or Quality())]) + encode_cp56time2a(ts)
+    if type_id is TypeID.M_BO_TB_1:
+        ts = obj.timestamp or datetime.now(tz=timezone.utc)
+        return (
+            struct.pack("<I", int(obj.value) & 0xFFFFFFFF)
+            + bytes([encode_qds(obj.quality or Quality())])
+            + encode_cp56time2a(ts)
+        )
     if type_id is TypeID.M_ME_TF_1:
         ts = obj.timestamp or datetime.now(tz=timezone.utc)
         return (
@@ -344,16 +426,41 @@ def _encode_element(type_id: TypeID, obj: InformationObject) -> bytes:
             + bytes([encode_qds(obj.quality or Quality())])
             + encode_cp56time2a(ts)
         )
+    if type_id is TypeID.M_IT_TB_1:
+        ts = obj.timestamp or datetime.now(tz=timezone.utc)
+        bcr = obj.value if isinstance(obj.value, BinaryCounter) else BinaryCounter(int(obj.value))
+        return bcr.to_bytes() + encode_cp56time2a(ts)
     if type_id is TypeID.C_SC_NA_1:
-        # value: bool (SCS); pack into bit 0; SE bit + QU from metadata
+        # SCO: bit 0 = SCS, bits 2..6 = QU, bit 7 = SE
         sco = (1 if obj.value else 0) & 0x01
+        sco |= (obj.qu & 0x1F) << 2
+        if obj.select:
+            sco |= 0x80
         return bytes([sco])
     if type_id is TypeID.C_DC_NA_1:
+        # DCO: bits 0..1 = DCS, bits 2..6 = QU, bit 7 = SE
         dco = int(obj.value) & 0x03
+        dco |= (obj.qu & 0x1F) << 2
+        if obj.select:
+            dco |= 0x80
         return bytes([dco])
+    if type_id is TypeID.C_SE_NA_1:
+        nva = _to_signed16(int(obj.value) & 0xFFFF)
+        qos = (obj.qu & 0x7F) | (0x80 if obj.select else 0)
+        return struct.pack("<h", nva) + bytes([qos])
+    if type_id is TypeID.C_SE_NB_1:
+        qos = (obj.qu & 0x7F) | (0x80 if obj.select else 0)
+        return struct.pack("<h", int(obj.value)) + bytes([qos])
+    if type_id is TypeID.C_SE_NC_1:
+        qos = (obj.qu & 0x7F) | (0x80 if obj.select else 0)
+        return struct.pack("<f", float(obj.value)) + bytes([qos])
+    if type_id is TypeID.C_BO_NA_1:
+        return struct.pack("<I", int(obj.value) & 0xFFFFFFFF)
     if type_id is TypeID.M_EI_NA_1:
         return bytes([int(obj.value) & 0xFF])
     if type_id is TypeID.C_IC_NA_1:
+        return bytes([int(obj.value) & 0xFF])
+    if type_id is TypeID.C_CI_NA_1:
         return bytes([int(obj.value) & 0xFF])
     if type_id is TypeID.C_RD_NA_1:
         return b""
@@ -372,6 +479,10 @@ def _decode_element(type_id: TypeID, buf: bytes, ioa: int) -> InformationObject:
     if type_id is TypeID.M_DP_NA_1:
         v, q = decode_diq(buf[0])
         return InformationObject(ioa=ioa, value=v, quality=q, raw_element=buf)
+    if type_id is TypeID.M_BO_NA_1:
+        (bsi,) = struct.unpack("<I", buf[0:4])
+        q = decode_qds(buf[4])
+        return InformationObject(ioa=ioa, value=bsi, quality=q, raw_element=buf)
     if type_id is TypeID.M_ME_NA_1:
         (nva,) = struct.unpack("<h", buf[0:2])
         q = decode_qds(buf[2])
@@ -384,6 +495,9 @@ def _decode_element(type_id: TypeID, buf: bytes, ioa: int) -> InformationObject:
         (f,) = struct.unpack("<f", buf[0:4])
         q = decode_qds(buf[4])
         return InformationObject(ioa=ioa, value=f, quality=q, raw_element=buf)
+    if type_id is TypeID.M_IT_NA_1:
+        bcr = BinaryCounter.from_bytes(buf[0:5])
+        return InformationObject(ioa=ioa, value=bcr, raw_element=buf)
     if type_id is TypeID.M_SP_TB_1:
         v, q = decode_siq(buf[0])
         ts = decode_cp56time2a(buf[1:8])
@@ -392,18 +506,64 @@ def _decode_element(type_id: TypeID, buf: bytes, ioa: int) -> InformationObject:
         v, q = decode_diq(buf[0])
         ts = decode_cp56time2a(buf[1:8])
         return InformationObject(ioa=ioa, value=v, quality=q, timestamp=ts, raw_element=buf)
+    if type_id is TypeID.M_BO_TB_1:
+        (bsi,) = struct.unpack("<I", buf[0:4])
+        q = decode_qds(buf[4])
+        ts = decode_cp56time2a(buf[5:12])
+        return InformationObject(ioa=ioa, value=bsi, quality=q, timestamp=ts, raw_element=buf)
     if type_id is TypeID.M_ME_TF_1:
         (f,) = struct.unpack("<f", buf[0:4])
         q = decode_qds(buf[4])
         ts = decode_cp56time2a(buf[5:12])
         return InformationObject(ioa=ioa, value=f, quality=q, timestamp=ts, raw_element=buf)
+    if type_id is TypeID.M_IT_TB_1:
+        bcr = BinaryCounter.from_bytes(buf[0:5])
+        ts = decode_cp56time2a(buf[5:12])
+        return InformationObject(ioa=ioa, value=bcr, timestamp=ts, raw_element=buf)
     if type_id is TypeID.C_SC_NA_1:
-        return InformationObject(ioa=ioa, value=bool(buf[0] & 0x01), raw_element=buf)
+        sco = buf[0]
+        return InformationObject(
+            ioa=ioa,
+            value=bool(sco & 0x01),
+            select=bool(sco & 0x80),
+            qu=(sco >> 2) & 0x1F,
+            raw_element=buf,
+        )
     if type_id is TypeID.C_DC_NA_1:
-        return InformationObject(ioa=ioa, value=buf[0] & 0x03, raw_element=buf)
+        dco = buf[0]
+        return InformationObject(
+            ioa=ioa,
+            value=dco & 0x03,
+            select=bool(dco & 0x80),
+            qu=(dco >> 2) & 0x1F,
+            raw_element=buf,
+        )
+    if type_id is TypeID.C_SE_NA_1:
+        (nva,) = struct.unpack("<h", buf[0:2])
+        qos = buf[2]
+        return InformationObject(
+            ioa=ioa, value=nva, select=bool(qos & 0x80), qu=qos & 0x7F, raw_element=buf
+        )
+    if type_id is TypeID.C_SE_NB_1:
+        (sva,) = struct.unpack("<h", buf[0:2])
+        qos = buf[2]
+        return InformationObject(
+            ioa=ioa, value=sva, select=bool(qos & 0x80), qu=qos & 0x7F, raw_element=buf
+        )
+    if type_id is TypeID.C_SE_NC_1:
+        (f,) = struct.unpack("<f", buf[0:4])
+        qos = buf[4]
+        return InformationObject(
+            ioa=ioa, value=f, select=bool(qos & 0x80), qu=qos & 0x7F, raw_element=buf
+        )
+    if type_id is TypeID.C_BO_NA_1:
+        (bsi,) = struct.unpack("<I", buf[0:4])
+        return InformationObject(ioa=ioa, value=bsi, raw_element=buf)
     if type_id is TypeID.M_EI_NA_1:
         return InformationObject(ioa=ioa, value=buf[0], raw_element=buf)
     if type_id is TypeID.C_IC_NA_1:
+        return InformationObject(ioa=ioa, value=buf[0], raw_element=buf)
+    if type_id is TypeID.C_CI_NA_1:
         return InformationObject(ioa=ioa, value=buf[0], raw_element=buf)
     if type_id is TypeID.C_RD_NA_1:
         return InformationObject(ioa=ioa, value=None, raw_element=buf)
@@ -569,21 +729,30 @@ def build_read_command(ca: int, ioa: int) -> bytes:
     return encode_asdu(asdu)
 
 
-def build_single_command(ca: int, ioa: int, on: bool) -> bytes:
-    """Build the body of a C_SC_NA_1 single command (direct execute)."""
+def build_single_command(
+    ca: int, ioa: int, on: bool, *, select: bool = False, qu: int = 0
+) -> bytes:
+    """Build the body of a C_SC_NA_1 single command.
+
+    ``select=True`` sets the SE bit (Select-Before-Operate); ``qu`` packs into
+    the QU field of SCO (5 bits).
+    """
     asdu = Asdu(
         type_id=TypeID.C_SC_NA_1,
         cot=COT.ACT,
         ca=ca,
-        objects=[InformationObject(ioa=ioa, value=bool(on))],
+        objects=[InformationObject(ioa=ioa, value=bool(on), select=select, qu=qu)],
     )
     return encode_asdu(asdu)
 
 
-def build_double_command(ca: int, ioa: int, dcs: int) -> bytes:
-    """Build the body of a C_DC_NA_1 double command (direct execute).
+def build_double_command(
+    ca: int, ioa: int, dcs: int, *, select: bool = False, qu: int = 0
+) -> bytes:
+    """Build the body of a C_DC_NA_1 double command.
 
     ``dcs``: 1 = OFF, 2 = ON. (0 and 3 are not permitted.)
+    ``select=True`` sets the SE bit (Select-Before-Operate).
     """
     if dcs not in (1, 2):
         raise EncodingError(f"DCS must be 1 (OFF) or 2 (ON), got {dcs}")
@@ -591,6 +760,78 @@ def build_double_command(ca: int, ioa: int, dcs: int) -> bytes:
         type_id=TypeID.C_DC_NA_1,
         cot=COT.ACT,
         ca=ca,
-        objects=[InformationObject(ioa=ioa, value=dcs)],
+        objects=[InformationObject(ioa=ioa, value=dcs, select=select, qu=qu)],
+    )
+    return encode_asdu(asdu)
+
+
+def build_set_point_normalised(
+    ca: int, ioa: int, value: int, *, select: bool = False, ql: int = 0
+) -> bytes:
+    """Build the body of a C_SE_NA_1 set-point command (normalised, signed 16-bit)."""
+    asdu = Asdu(
+        type_id=TypeID.C_SE_NA_1,
+        cot=COT.ACT,
+        ca=ca,
+        objects=[InformationObject(ioa=ioa, value=value, select=select, qu=ql)],
+    )
+    return encode_asdu(asdu)
+
+
+def build_set_point_scaled(
+    ca: int, ioa: int, value: int, *, select: bool = False, ql: int = 0
+) -> bytes:
+    """Build the body of a C_SE_NB_1 set-point command (scaled, signed 16-bit)."""
+    asdu = Asdu(
+        type_id=TypeID.C_SE_NB_1,
+        cot=COT.ACT,
+        ca=ca,
+        objects=[InformationObject(ioa=ioa, value=value, select=select, qu=ql)],
+    )
+    return encode_asdu(asdu)
+
+
+def build_set_point_float(
+    ca: int, ioa: int, value: float, *, select: bool = False, ql: int = 0
+) -> bytes:
+    """Build the body of a C_SE_NC_1 set-point command (IEEE 754 short float)."""
+    asdu = Asdu(
+        type_id=TypeID.C_SE_NC_1,
+        cot=COT.ACT,
+        ca=ca,
+        objects=[InformationObject(ioa=ioa, value=value, select=select, qu=ql)],
+    )
+    return encode_asdu(asdu)
+
+
+def build_bitstring_command(ca: int, ioa: int, value: int) -> bytes:
+    """Build the body of a C_BO_NA_1 32-bit bitstring command."""
+    asdu = Asdu(
+        type_id=TypeID.C_BO_NA_1,
+        cot=COT.ACT,
+        ca=ca,
+        objects=[InformationObject(ioa=ioa, value=value)],
+    )
+    return encode_asdu(asdu)
+
+
+def build_counter_interrogation(
+    ca: int, rqt: int = QCC_RQT_GENERAL, frz: int = QCC_FRZ_READ
+) -> bytes:
+    """Build the body of a C_CI_NA_1 counter interrogation ASDU.
+
+    ``rqt``: request type, 1..4 = group 1..4, 5 = general.
+    ``frz``: freeze action, 0=read, 1=freeze, 2=freeze+reset, 3=reset.
+    """
+    if not 1 <= rqt <= 5:
+        raise EncodingError(f"QCC RQT must be 1..5, got {rqt}")
+    if not 0 <= frz <= 3:
+        raise EncodingError(f"QCC FRZ must be 0..3, got {frz}")
+    qcc = (rqt & 0x3F) | ((frz & 0x03) << 6)
+    asdu = Asdu(
+        type_id=TypeID.C_CI_NA_1,
+        cot=COT.ACT,
+        ca=ca,
+        objects=[InformationObject(ioa=0, value=qcc)],
     )
     return encode_asdu(asdu)
