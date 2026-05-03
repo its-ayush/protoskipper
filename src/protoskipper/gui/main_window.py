@@ -388,11 +388,16 @@ class MainWindow(QMainWindow):
         self._action_report_bug = QAction(self.tr("Report Bug\u2026"), self)
         self._action_report_bug.triggered.connect(self._open_report_bug)
 
+        self._action_check_updates = QAction(self.tr("Check for Updates\u2026"), self)
+        self._action_check_updates.triggered.connect(self._check_for_updates)
+
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self._action_keyboard_shortcuts)
         help_menu.addSeparator()
         help_menu.addAction(self._action_docs)
         help_menu.addAction(self._action_report_bug)
+        help_menu.addSeparator()
+        help_menu.addAction(self._action_check_updates)
         help_menu.addSeparator()
         help_menu.addAction(self._action_about)
 
@@ -1199,6 +1204,13 @@ class MainWindow(QMainWindow):
     def _open_report_bug(self) -> None:
         """Help → Report Bug… — opens the GitHub new-issue form."""
         QDesktopServices.openUrl(QUrl("https://github.com/datasailors/protoskipper/issues/new"))
+
+    def _check_for_updates(self) -> None:
+        """Help → Check for Updates… — polls GitHub releases API (P6.D.1)."""
+        from protoskipper.gui.dialogs.update_checker import UpdateCheckerDialog
+
+        dlg = UpdateCheckerDialog(self)
+        dlg.exec()
 
     # ---- P3.E.1 First-run welcome dialog --------------------------------
 

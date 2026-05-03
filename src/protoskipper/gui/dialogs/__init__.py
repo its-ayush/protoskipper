@@ -13,6 +13,7 @@ from protoskipper.gui.dialogs.new_connection import NewConnectionDialog
 from protoskipper.gui.dialogs.preferences import PreferencesDialog
 from protoskipper.gui.dialogs.probe_network import ProbeNetworkDialog, ProbeSelection
 from protoskipper.gui.dialogs.safety_confirm import SafetyConfirmDialog
+from protoskipper.gui.dialogs.update_checker import UpdateCheckerDialog
 from protoskipper.gui.dialogs.write_dialog import WriteDialog
 
 __all__ = [
@@ -30,5 +31,6 @@ __all__ = [
     "ProbeSelection",
     "SafetyConfirmDialog",
     "SlaveRequest",
+    "UpdateCheckerDialog",
     "WriteDialog",
 ]

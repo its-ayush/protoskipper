@@ -128,15 +128,22 @@ jobs:
             --hidden-import protoskipper.builtin_drivers.modbus.driver `
             src/protoskipper/gui/app.py
 
-      - name: Package with NSIS
-        uses: joncloud/makensis-action@v4
-        with:
-          script-file: packaging/windows/installer.nsi
-          arguments: /DVERSION=${{ github.ref_name }}
-        continue-on-error: true   # fall back to bare zip if NSIS script missing
+      - name: Package with Inno Setup
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PWD: ${{ secrets.WINDOWS_SIGNING_PWD }}
+        run: |
+          # Decode signing cert if present
+          if ("${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}" -ne "") {
+            $bytes = [Convert]::FromBase64String("${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}")
+            [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\signing.pfx", $bytes)
+            $env:WINDOWS_SIGNING_CERT = "$env:RUNNER_TEMP\signing.pfx"
+          }
+          pwsh packaging/windows/build_installer.ps1
+        continue-on-error: true   # fall back to bare zip if Inno Setup missing
 
       - name: Fallback — zip the dist folder
-        if: ${{ !hashFiles('packaging/windows/installer.nsi') }}
+        if: ${{ !hashFiles('packaging/windows/protoskipper.iss') }}
         run: |
           Compress-Archive -Path dist/ProtoSkipper -DestinationPath ProtoSkipper-${{ github.ref_name }}-windows.zip
 
