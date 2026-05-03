@@ -22,14 +22,18 @@ wheels/
 *.egg
 MANIFEST
 
-# Virtual environments
+# Virtual environments — any name starting with .venv or venv
 .venv/
+.venv-*/
 venv/
+venv-*/
 env/
 ENV/
+.python-version
 
 # Tooling caches
 .pytest_cache/
+pytest-cache-files-*/
 .mypy_cache/
 .ruff_cache/
 .tox/
@@ -46,6 +50,11 @@ coverage.xml
 *.swo
 *~
 .DS_Store
+Thumbs.db
+
+# macOS metadata
+__MACOSX/
+._*
 
 # ProtoSkipper runtime artifacts
 # Per-session audit logs and capture files end up here in dev installs.
@@ -64,3 +73,14 @@ captures/
 # Sphinx / mkdocs
 docs/_build/
 site/
+
+# OS / editor generated
+*.orig
+*.bak
+*.tmp
+*.log
+
+# ProtoSkipper user data (written at runtime in dev installs)
+~/.protoskipper/
+register-maps/
+setup-files/
