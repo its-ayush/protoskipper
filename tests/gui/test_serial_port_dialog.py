@@ -109,7 +109,7 @@ def test_new_connection_port_combo_hidden_for_tcp(qtbot: object, state: object) 
             dlg._protocol_combo.setCurrentIndex(i)
             break
 
-    assert dlg._port_combo.isHidden()
+    assert dlg._serial_port_combo.isHidden()
 
 
 def test_new_connection_port_combo_shown_for_rtu(qtbot: object) -> None:
@@ -125,7 +125,7 @@ def test_new_connection_port_combo_shown_for_rtu(qtbot: object) -> None:
             dlg._protocol_combo.setCurrentIndex(i)
             break
 
-    assert not dlg._port_combo.isHidden()
+    assert not dlg._serial_port_combo.isHidden()
 
 
 def test_new_connection_port_combo_empty_when_no_ports(qtbot: object) -> None:
@@ -137,7 +137,7 @@ def test_new_connection_port_combo_empty_when_no_ports(qtbot: object) -> None:
         qtbot.addWidget(dlg)  # type: ignore[union-attr]
 
     # Only the blank placeholder item.
-    assert dlg._port_combo.count() == 1
+    assert dlg._serial_port_combo.count() == 1
 
 
 def test_new_connection_port_combo_lists_detected_ports(qtbot: object) -> None:
@@ -155,6 +155,6 @@ def test_new_connection_port_combo_lists_detected_ports(qtbot: object) -> None:
         qtbot.addWidget(dlg)  # type: ignore[union-attr]
 
     # Blank + 2 real entries.
-    assert dlg._port_combo.count() == 3
-    assert "/dev/ttyUSB0" in dlg._port_combo.itemText(1)
-    assert "/dev/ttyUSB1" in dlg._port_combo.itemText(2)
+    assert dlg._serial_port_combo.count() == 3
+    assert "/dev/ttyUSB0" in dlg._serial_port_combo.itemText(1)
+    assert "/dev/ttyUSB1" in dlg._serial_port_combo.itemText(2)

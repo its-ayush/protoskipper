@@ -25,6 +25,8 @@ from protoskipper.gui.services.app_state import ApplicationState, SessionInfo
 from protoskipper.gui.services.types import SessionId, new_session_id
 from protoskipper.gui.services.write_flow import WriteFlowController
 
+pytestmark = pytest.mark.gui
+
 # ---------------------------------------------------------------------------
 # Helpers / fakes
 # ---------------------------------------------------------------------------

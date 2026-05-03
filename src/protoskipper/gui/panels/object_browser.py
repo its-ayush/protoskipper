@@ -11,7 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QStyleOptionViewItem
+from PySide6.QtGui import QAction
+
+# QStyleOptionViewItem moved from QtGui → QtWidgets in PySide6 6.4.
+try:
+    from PySide6.QtWidgets import QStyleOptionViewItem
+except ImportError:
+    from PySide6.QtGui import QStyleOptionViewItem  # type: ignore[no-redef]
+
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,

@@ -7,6 +7,8 @@ guarantees without a real driver or network. Each test runs in < 500 ms.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -93,9 +95,11 @@ def state(qapp: object) -> ApplicationState:
 
 
 @pytest.fixture()
-def manager(state: ApplicationState, tmp_path: object) -> SessionManager:
+def manager(state: ApplicationState, tmp_path: object) -> Iterator[SessionManager]:
     handler = GuiConfirmHandler(dialog_factory=lambda intent, profile: None)
-    return SessionManager(state=state, confirm_handler=handler, audit_dir=tmp_path)  # type: ignore[arg-type]
+    mgr = SessionManager(state=state, confirm_handler=handler, audit_dir=tmp_path)  # type: ignore[arg-type]
+    yield mgr
+    mgr.shutdown()
 
 
 @pytest.fixture()

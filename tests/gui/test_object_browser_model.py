@@ -104,5 +104,6 @@ def test_session_closed_fires_model_reset(qtbot: object, state: ApplicationState
 
 
 def test_column_count_is_seven(state: ApplicationState) -> None:
+    # Model has 9 columns: S.No, Label, Value, Unit, Address, Type, Access, Quality, Poll
     model = ObjectBrowserModel(state)
-    assert model.columnCount() == 7
+    assert model.columnCount() == 9
