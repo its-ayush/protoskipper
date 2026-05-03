@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -76,6 +77,30 @@ def _make_session_info(
 def audit_dir() -> Path:  # type: ignore[return]
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _mark_welcome_shown(qapp: object) -> Iterator[None]:
+    """Ensure MainWindow._check_first_run returns early in tests.
+
+    On CI (fresh environment) QSettings has no value for ``shown_welcome``
+    so the one-time welcome dialog would call ``dlg.exec()`` and block.
+    We set the flag in QSettings before the first window is created and
+    restore the previous state afterwards.
+    """
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings("DataSailors", "ProtoSkipper")
+    had_value = settings.contains("shown_welcome")
+    original = settings.value("shown_welcome", False, bool)
+    settings.setValue("shown_welcome", True)
+    settings.sync()
+    yield
+    if had_value:
+        settings.setValue("shown_welcome", original)
+    else:
+        settings.remove("shown_welcome")
+    settings.sync()
 
 
 # ---------------------------------------------------------------------------
