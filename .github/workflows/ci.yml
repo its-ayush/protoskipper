@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main, "release/**"]
+    branches: [master, main, develop, "release/**"]
   pull_request:
-    branches: [master, main]
+    branches: [master, main, develop]
 
 # Cancel in-flight runs for the same branch/PR when a new push arrives.
 concurrency:

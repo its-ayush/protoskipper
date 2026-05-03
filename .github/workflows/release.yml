@@ -1,0 +1,233 @@
+name: Build & Release
+
+# Triggered when a version tag is pushed: git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Build the pure-Python wheel + sdist (used by PyPI and as a fallback)
+  # ---------------------------------------------------------------------------
+  build-wheel:
+    name: Build wheel & sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Build
+        run: |
+          pip install build
+          python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Linux — standalone binary + .deb package
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build Linux (.deb)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system display deps (needed by PySide6 at import time)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+            libxcb-xinerama0 libxkbcommon-x11-0 libegl1 libgl1 \
+            libxcb1 libx11-xcb1
+
+      - name: Install Python deps
+        run: pip install -e ".[gui,modbus]" pyinstaller
+
+      - name: Build standalone binary with PyInstaller
+        run: |
+          xvfb-run --auto-servernum pyinstaller \
+            --onedir \
+            --name protoskipper-gui \
+            --hidden-import protoskipper.builtin_drivers.modbus.driver \
+            src/protoskipper/gui/app.py
+        env:
+          QT_QPA_PLATFORM: xcb
+
+      - name: Package as .deb with fpm
+        run: |
+          sudo gem install fpm --quiet
+          VERSION=${GITHUB_REF_NAME#v}
+          fpm \
+            -s dir -t deb \
+            -n protoskipper \
+            -v "$VERSION" \
+            --description "SCADA/BMS protocol testing and commissioning toolkit" \
+            --url "https://protoskipper.dev" \
+            --license "GPL-3.0-or-later" \
+            --maintainer "DataSailors Pvt Ltd <hello@datasailors.io>" \
+            --category "utils" \
+            --depends libxcb1 \
+            --after-install /dev/null \
+            dist/protoskipper-gui/=/opt/protoskipper/ \
+            --prefix /
+          # Add /usr/bin symlink via post-install script
+          mkdir -p staging/usr/bin
+          printf '#!/bin/sh\nexec /opt/protoskipper/protoskipper-gui "$@"\n' \
+            > staging/usr/bin/protoskipper-gui
+          chmod +x staging/usr/bin/protoskipper-gui
+          fpm \
+            -s dir -t deb \
+            -n protoskipper \
+            -v "$VERSION" \
+            --description "SCADA/BMS protocol testing and commissioning toolkit" \
+            --url "https://protoskipper.dev" \
+            --license "GPL-3.0-or-later" \
+            --maintainer "DataSailors Pvt Ltd <hello@datasailors.io>" \
+            --depends libxcb1 \
+            -C staging \
+            usr/bin/protoskipper-gui=/usr/bin/protoskipper-gui
+          # Merge both into one final .deb by renaming
+          ls -la *.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-deb
+          path: "*.deb"
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Windows — .exe installer via NSIS
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -e ".[gui,modbus]" pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller `
+            --onedir `
+            --windowed `
+            --name ProtoSkipper `
+            --hidden-import protoskipper.builtin_drivers.modbus.driver `
+            src/protoskipper/gui/app.py
+
+      - name: Package with NSIS
+        uses: joncloud/makensis-action@v4
+        with:
+          script-file: packaging/windows/installer.nsi
+          arguments: /DVERSION=${{ github.ref_name }}
+        continue-on-error: true   # fall back to bare zip if NSIS script missing
+
+      - name: Fallback — zip the dist folder
+        if: ${{ !hashFiles('packaging/windows/installer.nsi') }}
+        run: |
+          Compress-Archive -Path dist/ProtoSkipper -DestinationPath ProtoSkipper-${{ github.ref_name }}-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            *.exe
+            *.zip
+
+  # ---------------------------------------------------------------------------
+  # Job 4: macOS — .dmg
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: Build macOS (.dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install -e ".[gui,modbus]" pyinstaller
+
+      - name: Build .app bundle with PyInstaller
+        run: |
+          pyinstaller \
+            --onedir \
+            --windowed \
+            --name ProtoSkipper \
+            --hidden-import protoskipper.builtin_drivers.modbus.driver \
+            src/protoskipper/gui/app.py
+
+      - name: Create .dmg
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "ProtoSkipper ${{ github.ref_name }}" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --app-drop-link 600 185 \
+            "ProtoSkipper-${{ github.ref_name }}-macos.dmg" \
+            "dist/ProtoSkipper.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: "*.dmg"
+
+  # ---------------------------------------------------------------------------
+  # Job 5: Create the GitHub Release and attach all artifacts
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Publish GitHub Release
+    needs: [build-wheel, build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # required to create releases and upload assets
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets/
+
+      - name: List release assets
+        run: find release-assets/ -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "ProtoSkipper ${{ github.ref_name }}"
+          draft: true          # always draft first — review then publish manually
+          generate_release_notes: true
+          files: |
+            release-assets/python-dist/*.whl
+            release-assets/python-dist/*.tar.gz
+            release-assets/linux-deb/*.deb
+            release-assets/windows-installer/*.exe
+            release-assets/windows-installer/*.zip
+            release-assets/macos-dmg/*.dmg
