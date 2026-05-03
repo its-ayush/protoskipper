@@ -385,6 +385,8 @@ class _Iec104Session(DriverSession):
                 "ca": self._ca,
                 "ioa": ioa,
                 "type": type_id.name,
+                "asdu_type": type_id.name,
+                "cot": COT.ACT.name,
                 "select": select,
                 "ql": ql,
             },
@@ -434,6 +436,14 @@ class _Iec104Session(DriverSession):
                 success=False,
                 timestamp=datetime.now(tz=timezone.utc),
                 error=str(exc),
+                metadata={
+                    "asdu_type": type_id.name,
+                    "cot": COT.ACT.name,
+                    "ca": self._ca,
+                    "ioa": ioa,
+                    "select": select,
+                    "transport_failure": True,
+                },
             )
             self.safety.record_write_outcome(result)
             return result
@@ -444,6 +454,16 @@ class _Iec104Session(DriverSession):
             timestamp=datetime.now(tz=timezone.utc),
             response_bytes=None,
             error=None if success else f"reply COT={reply.cot.name} negative={reply.negative}",
+            metadata={
+                "asdu_type": type_id.name,
+                "cot": COT.ACT.name,
+                "ca": self._ca,
+                "ioa": ioa,
+                "select": select,
+                "reply_asdu_type": reply.type_id.name,
+                "reply_cot": reply.cot.name,
+                "reply_negative": reply.negative,
+            },
         )
         self.safety.record_write_outcome(result)
         return result
