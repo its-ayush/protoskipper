@@ -202,6 +202,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases and upload assets
+      id-token: write   # required for PyPI Trusted Publisher (OIDC)
 
     steps:
       - uses: actions/checkout@v4
@@ -217,6 +218,11 @@ jobs:
 
       - name: List release assets
         run: find release-assets/ -type f | sort
+
+      - name: Publish to PyPI (Trusted Publisher — no token needed)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: release-assets/python-dist/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
