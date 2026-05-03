@@ -104,6 +104,7 @@ protoskipper-gui = "protoskipper.gui.app:main"
 [project.entry-points."protoskipper.protocols"]
 "modbus.tcp" = "protoskipper.builtin_drivers.modbus.driver:ModbusTcpDriver"
 "modbus.rtu" = "protoskipper.builtin_drivers.modbus.driver:ModbusRtuDriver"
+"iec104.tcp" = "protoskipper.builtin_drivers.iec104.driver:Iec104TcpDriver"
 
 # GUI panel contributions (per-protocol custom views) use a separate group
 # so a headless install never has to import Qt.

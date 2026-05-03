@@ -908,25 +908,41 @@ disk. Phase 2 makes it pcapng-shaped, replayable, and verifiable.
 **Theme:** First non-Modbus protocol; validates that the plugin contract
 holds up.
 
+> **Status — MVP shipped.** The master-client core (codec, state machine,
+> driver-contract integration, in-tree mini-slave + 121 tests) is merged.
+> See `docs/IEC104_PLAN.md` for the full feature catalogue and the items
+> still deferred (slave server P4.C, fuzzer P4.D, PCAP analyzer P4.E,
+> dedicated GUI panels P4.F, TLS, file transfer, vendor profiles,
+> conformance runner, ASDU types outside the canonical subset). Those
+> ship in follow-up PRs.
+
 ## P4.A — IEC 104 driver
 
-### P4.A.1 Standalone plugin package
+### P4.A.1 Plugin scaffold ✅
 
-* **Files touched:** `plugins-builtin/protoskipper-iec104/` (new).
-* **Acceptance criteria:** Driver ships as its own pip-installable
-  package using `bacpypes3`-style libraries vetted for license compatibility.
-  Discovers RTUs, reads ASDUs, supports General Interrogation.
+* **Done.** Driver lives at `src/protoskipper/builtin_drivers/iec104/`
+  (mirrors the Modbus layout for fast integration; pip-installable
+  packaging is deferred to a later PR).
+* Modules: `apci.py` (I/S/U codec), `asdu.py` (canonical type subset +
+  CP56Time2a/CP24Time2a/QDS/SIQ/DIQ), `master.py` (state machine),
+  `pointlist.py` (CSV loader), `driver.py` (`ProtocolDriver` wiring).
+* Registered as entry point `iec104.tcp` in `pyproject.toml`.
 
-### P4.A.2 Capture + audit parity with Modbus
+### P4.A.2 Capture + audit parity with Modbus ✅ (partial)
 
-* **Acceptance criteria:** Same audit-log row schema, same capture
-  format, same UI affordances enabled by capability protocols.
+* **Done.** Frame sink protocol matches Modbus; tx/rx APDUs forwarded
+  with `protocol="iec104.tcp"`. `SafetyContext.require_write_authorization`
+  + `record_write_outcome` are called identically to Modbus for single-,
+  double-command, and clock-sync writes.
+* **Deferred:** dedicated audit-row enrichment (e.g. ASDU type +
+  COT in row metadata) — Modbus-equivalent today, optional polish later.
 
 ### P4.A.3 GUI tests
 
-* **Acceptance criteria:** A simulator (community-maintained `iec104test`
-  or in-house stub) is started in CI; a session can be opened, GI'd,
-  and closed with the audit chain intact.
+* **Deferred to follow-up PR.** Headless integration tests cover the
+  protocol end-to-end against an in-tree mini-slave; GUI smoke tests
+  require additional panel work (`docs/IEC104_PLAN.md` P4.F).
+
 
 ---
 
