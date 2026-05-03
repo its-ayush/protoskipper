@@ -42,6 +42,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import socket
+import ssl
 import threading
 import time
 from collections.abc import Callable
@@ -123,6 +124,12 @@ class SlaveConfig:
     sbo_timeout: float = 30.0  # SBO select expires if execute doesn't follow
     backlog: int = 5
     max_clients: int = 4
+    # IEC 62351-3 TLS transport. When enabled, every accepted connection is
+    # wrapped with TLS using ``tls_context`` (which MUST be provided by the
+    # caller and configured with the slave's server certificate plus an
+    # optional client-cert verification chain for mutual auth).
+    tls: bool = False
+    tls_context: ssl.SSLContext | None = None
 
 
 @dataclass
@@ -309,6 +316,19 @@ class Iec104SlaveServer:
                 continue
             except OSError:
                 return
+            if self._cfg.tls:
+                if self._cfg.tls_context is None:
+                    _logger.error("TLS enabled but no tls_context configured; dropping connection")
+                    with contextlib.suppress(OSError):
+                        client_sock.close()
+                    continue
+                try:
+                    client_sock = self._cfg.tls_context.wrap_socket(client_sock, server_side=True)
+                except (ssl.SSLError, OSError) as exc:
+                    _logger.warning("TLS handshake failed: %s", exc)
+                    with contextlib.suppress(OSError):
+                        client_sock.close()
+                    continue
             with self._clients_lock:
                 if sum(1 for c in self._clients if c.alive) >= self._cfg.max_clients:
                     with contextlib.suppress(OSError):

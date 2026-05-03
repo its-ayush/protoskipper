@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import socket
+import ssl
 import threading
 import time
 from collections.abc import Callable
@@ -76,6 +77,14 @@ class MasterConfig:
     t3: float = 20.0
     auto_reconnect: bool = True
     reconnect_delay: float = 5.0
+    # IEC 62351-3 TLS transport. Enable to wrap the TCP socket with TLS.
+    # If ``tls_context`` is None and ``tls`` is True, a default client
+    # context is created; tests / production code typically pass an
+    # ``ssl.SSLContext`` configured with the substation's CA bundle and
+    # client cert.
+    tls: bool = False
+    tls_context: ssl.SSLContext | None = None
+    tls_server_hostname: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +194,7 @@ class Iec104MasterSession:
         if self._closed:
             raise ProtoSkipperError("Session is closed; build a new one")
         try:
-            self._sock = socket.create_connection(
+            raw_sock = socket.create_connection(
                 (self._cfg.host, self._cfg.port),
                 timeout=self._cfg.t0,
             )
@@ -193,6 +202,19 @@ class Iec104MasterSession:
             raise ConnectionFailure(
                 f"IEC104 connect to {self._cfg.host}:{self._cfg.port} failed: {exc}"
             ) from exc
+        if self._cfg.tls:
+            ctx = self._cfg.tls_context or ssl.create_default_context()
+            try:
+                self._sock = ctx.wrap_socket(
+                    raw_sock,
+                    server_hostname=self._cfg.tls_server_hostname or self._cfg.host,
+                )
+            except (ssl.SSLError, OSError) as exc:
+                with contextlib.suppress(OSError):
+                    raw_sock.close()
+                raise ConnectionFailure(f"IEC104 TLS handshake failed: {exc}") from exc
+        else:
+            self._sock = raw_sock
         # Switch to non-blocking-ish: use a timeout for clean shutdown polling.
         self._sock.settimeout(0.5)
         self._connected.set()
