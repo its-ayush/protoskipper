@@ -1,0 +1,23 @@
+# SEL-351A Overcurrent / Distance Protection Relay — IEC 60870-5-104 profile
+id: sel_351a
+display_name: "SEL 351A / 351S"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 30
+t1: 15
+t2: 10
+t3: 20
+quirks:
+  - "sel-single-ca"       # Only one CA supported per connection
+  - "sel-no-counter-int"  # C_CI_NA_1 (Counter Interrogation) not supported
+  - "sel-cot1-only"       # COT size forced to 1 on older firmware (< R107); use cot_size: 1
+notes: >
+  Tested against SEL-351A firmware R107 and R109.
+  The relay only supports a single CA per TCP connection.
+  Counter Interrogation (type 101) is not implemented; issue type 100 only.
+  Some firmware versions enforce COT-size = 1; check relay ACS port settings.
+  k=12 / w=8 are safe defaults; increasing beyond 20/15 may cause watchdog trips.

@@ -1,0 +1,23 @@
+# Toshiba GRL100 / GRL200 Protection Relay — IEC 60870-5-104 profile
+id: toshiba_grl100
+display_name: "Toshiba GRL100 / GRL200"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 30
+t1: 20
+t2: 10
+t3: 30
+quirks:
+  - "toshiba-delayed-startdt-con"  # STARTDT CON may arrive up to 3 s after STARTDT ACT
+  - "toshiba-no-sbo"               # Select-Before-Operate not supported; use direct commands
+  - "toshiba-ioa-origin-1"         # IOA numbering starts at 1 (not 0); IOA=0 is reserved
+notes: >
+  Toshiba GRL100/200 relay series tested against firmware 3.x and 4.x.
+  STARTDT handshake can be slow under heavy load; t0 ≥ 30 s recommended.
+  Set-point commands (C_SE_*) use direct-execute mode only — SBO sequence
+  is not implemented by the relay firmware.
+  All IOAs begin at 1; IOA=0 responses are a firmware bug and should be filtered.

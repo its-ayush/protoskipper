@@ -1,0 +1,21 @@
+# GE / Grid Solutions IEC 60870-5-104 profile
+id: ge
+display_name: "GE Grid Solutions (D60 / D30 / UR-series)"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 30
+t1: 15
+t2: 10
+t3: 20
+quirks:
+  - "ioa_1byte_mode"   # some UR-series use 1-byte IOA; set ioa_size=1 if points not found
+  - "no_ci"            # UR-series does not support Counter Interrogation
+notes: >
+  GE UR-series (D60, D30, F60, etc.).
+  Counter Interrogation (C_CI_NA_1) is not implemented on UR-series;
+  use periodic reads for billing counters.
+  Old firmware may use 1-byte IOA — if objects are missing, try ioa_size=1.

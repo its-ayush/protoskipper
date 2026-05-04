@@ -1,0 +1,57 @@
+# IEC 60870-5-104 GI Conformance Profile
+# Detailed tests focused exclusively on General Interrogation behaviour.
+# Useful when a slave passes basic connectivity but GI has issues.
+
+id: gi_conformance
+display_name: "GI Conformance (Detailed)"
+direction: master
+edition: "2.0+A1"
+profiles_allowed:
+  - lab
+  - commissioning
+
+tests:
+  - key: gi
+    label: "Basic GI Round-Trip"
+    description: >
+      Issues C_IC_NA_1 QOI=20.  Expects ACT-CON → data (COT=20) → ACT-TERM.
+      Measures total elapsed time.
+    timeout_s: 120
+    mandatory: true
+
+  - key: gi_conformance
+    label: "GI Quality Flags"
+    description: >
+      All returned IOAs must have IV=0, NT=0 (unless slave is known to set NT
+      on coldstart points).  OV (overflow) and SB (substituted) are flagged
+      but not failed.
+    timeout_s: 120
+    mandatory: true
+
+  - key: gi_group_1
+    label: "Group GI (Group 1)"
+    description: >
+      Issues C_IC_NA_1 QOI=21 (Group 1).  Expects ACT-CON and ACT-TERM.
+      Objects returned must all belong to GI Group 1.
+    timeout_s: 60
+    mandatory: false
+
+  - key: gi_spontaneous_interleave
+    label: "Spontaneous Events During GI"
+    description: >
+      During GI the slave may emit spontaneous events (COT=3).
+      ProtoSkipper must not confuse them with GI responses (COT=20).
+      Both must land in the SOE panel correctly attributed.
+    timeout_s: 120
+    mandatory: false
+
+  - key: gi_stopdt_mid_gi
+    label: "STOPDT Mid-GI Abort"
+    description: >
+      After sending GI, ProtoSkipper issues STOPDT ACT.
+      The slave must abort GI cleanly; partial results are acceptable.
+      The session must reconnect after STARTDT.
+    timeout_s: 30
+    mandatory: false
+    profiles_allowed:
+      - lab

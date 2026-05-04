@@ -1,0 +1,25 @@
+# WAGO 750-870 Fieldbus Controller — IEC 60870-5-104 profile
+id: wago_750870
+display_name: "WAGO 750-870 Fieldbus Controller"
+ca_size: 1
+ioa_size: 2
+cot_size: 1
+default_oa: 0
+k: 8
+w: 5
+t0: 20
+t1: 10
+t2: 5
+t3: 15
+quirks:
+  - "wago-ca1-only"          # Single CA only; CA value must be 1
+  - "wago-1byte-cot"         # COT is always 1 byte (no originator address field)
+  - "wago-2byte-ioa"         # IOA is 2 bytes (not 3); configure ioa_size=2
+  - "wago-no-testfr"         # TESTFR keep-alive not implemented; rely on t0/TCP keepalive
+  - "wago-no-file-transfer"  # File transfer not supported
+notes: >
+  WAGO 750-870 is a compact PLC with an IEC 104 slave module.
+  The device is constrained: 1-byte CA, 2-byte IOA, 1-byte COT, no TESTFR,
+  no file transfer.  k=8/w=5 prevents buffer exhaustion on the small stack.
+  t3 must not exceed 15 s; set lower if disconnections are observed.
+  Tested against firmware 03.x with the 750-880 IEC 104 communication coupler.

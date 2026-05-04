@@ -40,9 +40,24 @@ from protoskipper.core.audit import verify_log
 from protoskipper.core.capture.pcapng import read_pcapng
 from protoskipper.core.driver import DeviceRef, ObjectRef, SessionProfile, WriteIntent
 from protoskipper.core.plugin_loader import load_protocol_drivers
+from protoskipper.core.setup import (
+    Iec104Setup,
+    SetupError,
+)
+from protoskipper.core.setup import (
+    load as load_iec104_setup,
+)
+from protoskipper.core.setup import (
+    save as save_iec104_setup,
+)
 from protoskipper.gui.dialogs import (
     AuditViewDialog,
+    Iec104CommandDialog,
+    Iec104ConformanceDialog,
+    Iec104DiffDialog,
+    Iec104PcapViewerDialog,
     NewConnectionDialog,
+    NewSlaveDialog,
     PreferencesDialog,
     ProbeNetworkDialog,
     ProbeSelection,
@@ -50,9 +65,14 @@ from protoskipper.gui.dialogs import (
 )
 from protoskipper.gui.panels import (
     DeviceTreePanel,
+    Iec104BenchPanel,
+    Iec104InterrogationPanel,
+    Iec104TimeSyncPanel,
     ObjectBrowserPanel,
     PacketViewPanel,
+    ScriptingConsolePanel,
     SessionStatusPanel,
+    SoePanel,
     WatchlistPanel,
 )
 from protoskipper.gui.services import (
@@ -104,6 +124,8 @@ class MainWindow(QMainWindow):
 
         # Capture state tracking (per-window, not per-session).
         self._capture_active: bool = False
+        # IEC 104 slave server instance (if running).
+        self._iec104_slave: object | None = None
 
         # ---- ui ----
         self._build_actions()
@@ -224,12 +246,90 @@ class MainWindow(QMainWindow):
         audit_menu.addAction(self._action_audit_verify)
         audit_menu.addAction(self._action_audit_view)
 
-        # P3.A.2 Tools menu — Preferences…
+        # P3.A.2 Tools menu — Preferences… + IEC 60870-5-104 submenu
         self._action_preferences = QAction(self.tr("Preferences\u2026"), self)
         self._action_preferences.setShortcut("Ctrl+,")
         self._action_preferences.triggered.connect(self._on_preferences)
         tools_menu = menu.addMenu(self.tr("&Tools"))
         tools_menu.addAction(self._action_preferences)
+        tools_menu.addSeparator()
+
+        iec104_menu = tools_menu.addMenu(self.tr("IEC 60870-5-104"))
+
+        self._action_iec104_new_slave = QAction(self.tr("New IEC 104 Slave\u2026"), self)
+        self._action_iec104_new_slave.setToolTip(
+            "Start an IEC 104 slave (simulator) server on the local machine"
+        )
+        self._action_iec104_new_slave.triggered.connect(self._open_slave_setup_dialog)
+        iec104_menu.addAction(self._action_iec104_new_slave)
+        iec104_menu.addSeparator()
+
+        self._action_iec104_command = QAction(self.tr("Send Command\u2026"), self)
+        self._action_iec104_command.setToolTip(
+            "Open the IEC 104 command dialog for the active session"
+        )
+        self._action_iec104_command.triggered.connect(self._open_iec104_command_dialog)
+        iec104_menu.addAction(self._action_iec104_command)
+
+        self._action_iec104_interrogation = QAction(self.tr("Interrogation Panel"), self)
+        self._action_iec104_interrogation.setToolTip("Show the GI / CI / Read command panel")
+        self._action_iec104_interrogation.triggered.connect(
+            lambda: self._tabs.setCurrentWidget(self._interrogation_panel)
+        )
+        iec104_menu.addAction(self._action_iec104_interrogation)
+
+        self._action_iec104_timesync = QAction(self.tr("Time Sync Panel"), self)
+        self._action_iec104_timesync.setToolTip("Show the IEC 104 clock-sync panel")
+        self._action_iec104_timesync.triggered.connect(
+            lambda: self._tabs.setCurrentWidget(self._timesync_panel)
+        )
+        iec104_menu.addAction(self._action_iec104_timesync)
+
+        self._action_iec104_bench = QAction(self.tr("Bench Overview"), self)
+        self._action_iec104_bench.setToolTip("Show the bench overview tile grid")
+        self._action_iec104_bench.triggered.connect(
+            lambda: self._tabs.setCurrentWidget(self._bench_panel)
+        )
+        iec104_menu.addAction(self._action_iec104_bench)
+
+        iec104_menu.addSeparator()
+
+        self._action_iec104_open_pcap = QAction(self.tr("Open IEC 104 PCAP\u2026"), self)
+        self._action_iec104_open_pcap.setToolTip(
+            "Open an offline .pcap / .pcapng file and dissect IEC 104 frames"
+        )
+        self._action_iec104_open_pcap.triggered.connect(self._open_iec104_pcap_viewer)
+        iec104_menu.addAction(self._action_iec104_open_pcap)
+
+        self._action_iec104_diff = QAction(self.tr("Diff vs Point List\u2026"), self)
+        self._action_iec104_diff.setToolTip(
+            "Compare enumerated objects against a CSV / XLSX point list"
+        )
+        self._action_iec104_diff.triggered.connect(self._open_iec104_diff_dialog)
+        iec104_menu.addAction(self._action_iec104_diff)
+
+        self._action_iec104_conformance = QAction(self.tr("Conformance Tests\u2026"), self)
+        self._action_iec104_conformance.setToolTip(
+            "Run IEC 60870-5-104 conformance checks against the active session"
+        )
+        self._action_iec104_conformance.triggered.connect(self._open_iec104_conformance_dialog)
+        iec104_menu.addAction(self._action_iec104_conformance)
+
+        iec104_menu.addSeparator()
+
+        self._action_iec104_save_setup = QAction(self.tr("Save IEC\u00a0104 Setup\u2026"), self)
+        self._action_iec104_save_setup.setToolTip(
+            "Save IEC\u00a0104 connection settings to an iec104-setup.json file"
+        )
+        self._action_iec104_save_setup.triggered.connect(self._save_iec104_setup)
+        iec104_menu.addAction(self._action_iec104_save_setup)
+
+        self._action_iec104_load_setup = QAction(self.tr("Load IEC\u00a0104 Setup\u2026"), self)
+        self._action_iec104_load_setup.setToolTip(
+            "Load IEC\u00a0104 connection settings from an iec104-setup.json file"
+        )
+        self._action_iec104_load_setup.triggered.connect(self._load_iec104_setup)
+        iec104_menu.addAction(self._action_iec104_load_setup)
 
         # P3.D View menu — Theme + Density
         self._action_theme_light = QAction(self.tr("&Light"), self)
@@ -360,7 +460,32 @@ class MainWindow(QMainWindow):
         self._packet_view = PacketViewPanel(self._state, self)
         self._tabs.addTab(self._object_browser, "Object Browser")
         self._tabs.addTab(self._packet_view, "Packet View")
+
+        # ---- IEC 104 panels (additional tabs) ----
+        self._interrogation_panel = Iec104InterrogationPanel(
+            self._state, self._session_manager, self
+        )
+        self._tabs.addTab(self._interrogation_panel, "IEC 104 Interrogation")
+
+        self._timesync_panel = Iec104TimeSyncPanel(self._state, self._session_manager, self)
+        self._tabs.addTab(self._timesync_panel, "IEC 104 Time Sync")
+
+        self._bench_panel = Iec104BenchPanel(self._state, self)
+        self._bench_panel.session_focused.connect(self._on_session_selected)
+        self._tabs.addTab(self._bench_panel, "Bench Overview")
+
         self.setCentralWidget(self._tabs)
+
+        # ---- SOE panel (bottom dock) ----
+        self._soe_panel = SoePanel(self._state, self)
+        dock_soe = QDockWidget("SOE — Sequence of Events", self)
+        dock_soe.setObjectName("SoeDock")
+        dock_soe.setWidget(self._soe_panel)
+        dock_soe.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_soe)
+        self._dock_soe = dock_soe
 
         # ---- right: watchlist + session status ----
         self._watchlist = WatchlistPanel(self._state, self._session_manager, self)
@@ -383,6 +508,18 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_right_bottom)
         self._dock_sessions = dock_right_bottom
 
+        # ---- bottom: scripting console (hidden by default) ----
+        self._scripting_console = ScriptingConsolePanel(self._state, self._session_manager, self)
+        dock_console = QDockWidget("Scripting Console", self)
+        dock_console.setObjectName("ScriptingConsoleDock")
+        dock_console.setWidget(self._scripting_console)
+        dock_console.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_console)
+        dock_console.hide()  # off by default; View → Panels → Scripting Console to show
+        self._dock_console = dock_console
+
     def _build_panel_view_actions(self) -> None:
         """Add dock-panel toggle actions to View → Panels so closed panels can be reopened."""
         view_menu = self.menuBar().findChild(type(self.menuBar().actions()[0].menu()), "")
@@ -399,6 +536,8 @@ class MainWindow(QMainWindow):
         panels_submenu.addAction(self._dock_devices.toggleViewAction())
         panels_submenu.addAction(self._dock_watchlist.toggleViewAction())
         panels_submenu.addAction(self._dock_sessions.toggleViewAction())
+        panels_submenu.addAction(self._dock_soe.toggleViewAction())
+        panels_submenu.addAction(self._dock_console.toggleViewAction())
         view_menu.addSeparator()
         restore_action = view_menu.addAction(self.tr("Restore default layout"))
         restore_action.triggered.connect(self._restore_default_layout)
@@ -408,10 +547,12 @@ class MainWindow(QMainWindow):
         self._dock_devices.setVisible(True)
         self._dock_watchlist.setVisible(True)
         self._dock_sessions.setVisible(True)
+        self._dock_soe.setVisible(True)
         # Re-add to their default sides (already added; just ensure visible).
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_devices)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_watchlist)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_sessions)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._dock_soe)
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)
@@ -572,6 +713,9 @@ class MainWindow(QMainWindow):
     def _on_session_selected(self, session_id: str) -> None:
         self._object_browser.set_session(session_id)
         self._packet_view.set_session(session_id)
+        self._soe_panel.set_session(session_id)
+        self._interrogation_panel.set_session(session_id)
+        self._timesync_panel.set_session(session_id)
         info = self._state.session(SessionId(session_id))
         is_open = info is not None and info.is_open
         self._action_disconnect.setEnabled(is_open)
@@ -764,7 +908,200 @@ class MainWindow(QMainWindow):
             not active and self._currently_selected_session() is not None
         )
 
-    # ---- P3.A.2 Preferences --------------------------------------------
+    # ---- IEC 104 dialog handlers ---------------------------------------
+
+    def _open_slave_setup_dialog(self) -> None:
+        """Tools → IEC 104 → New IEC 104 Slave…"""
+        info = None
+        sid = self._currently_selected_session()
+        if sid:
+            info = self._state.session(SessionId(sid))
+        profile = info.profile if info else None
+        from protoskipper.core.driver import SessionProfile as _SessionProfile
+
+        dlg = NewSlaveDialog(profile=profile or _SessionProfile.LAB, parent=self)
+        if dlg.exec() != NewSlaveDialog.Accepted:
+            return
+        req = dlg.request()
+        if req is None:
+            return
+        self._start_iec104_slave(req)
+
+    def _start_iec104_slave(self, req: object) -> None:
+        """Launch the IEC 104 slave server in a background daemon thread."""
+        import threading
+
+        from protoskipper.builtin_drivers.iec104.slave import (
+            Iec104SlaveServer,
+            SlaveConfig,
+        )
+
+        # Shut down any existing slave first.
+        if self._iec104_slave is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self._iec104_slave.stop()  # type: ignore[union-attr]
+            self._iec104_slave = None
+
+        # Build SlaveConfig from SlaveRequest fields present in both.
+        slave_cfg = SlaveConfig(
+            host=getattr(req, "bind_address", "0.0.0.0"),
+            port=getattr(req, "port", 2404),
+            ca=getattr(req, "ca", 1),
+            max_clients=getattr(req, "max_clients", 4),
+            tls=getattr(req, "tls", False),
+        )
+        server = Iec104SlaveServer(slave_cfg)
+        self._iec104_slave = server
+
+        def _run() -> None:
+            try:
+                server.start()
+            except Exception as exc:
+                _logger.exception("IEC 104 slave error: %s", exc)
+
+        t = threading.Thread(target=_run, daemon=True, name="iec104-slave")
+        t.start()
+        self.statusBar().showMessage(
+            f"IEC 104 slave started on {slave_cfg.host}:{slave_cfg.port}", 5000
+        )
+
+    def _open_iec104_command_dialog(self) -> None:
+        """Tools → IEC 104 → Send Command…"""
+        sid = self._active_session_id()
+        if sid is None:
+            QMessageBox.warning(self, "No active session", "Open an IEC 104 session first.")
+            return
+        dlg = Iec104CommandDialog(
+            session_id=sid,
+            state=self._state,
+            session_manager=self._session_manager,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _open_iec104_pcap_viewer(self) -> None:
+        """Tools → IEC 104 → Open IEC 104 PCAP…"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open IEC 104 PCAP",
+            str(Path.home()),
+            "PCAP files (*.pcap *.pcapng);;All files (*)",
+        )
+        if not path:
+            return
+        dlg = Iec104PcapViewerDialog(path, parent=self)
+        dlg.exec()
+
+    def _open_iec104_diff_dialog(self) -> None:
+        """Tools → IEC 104 → Diff vs Point List…"""
+        sid = self._active_session_id()
+        if sid is None:
+            QMessageBox.warning(self, "No active session", "Open an IEC 104 session first.")
+            return
+        dlg = Iec104DiffDialog(session_id=sid, state=self._state, parent=self)
+        dlg.exec()
+
+    def _open_iec104_conformance_dialog(self) -> None:
+        """Tools → IEC 104 → Conformance Tests…"""
+        sid = self._active_session_id()
+        if sid is None:
+            QMessageBox.warning(self, "No active session", "Open an IEC 104 session first.")
+            return
+        dlg = Iec104ConformanceDialog(
+            session_id=sid,
+            state=self._state,
+            session_manager=self._session_manager,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _save_iec104_setup(self) -> None:
+        """Tools → IEC 104 → Save IEC 104 Setup… — write an iec104-setup.json."""
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        Path(default_dir).mkdir(parents=True, exist_ok=True)
+        path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("Save IEC\u00a0104 Setup"),
+            default_dir,
+            "IEC\u00a0104 Setup files (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        if not path.suffix:
+            path = path.with_suffix(".json")
+
+        # Populate from the active session (if any).
+        setup = Iec104Setup(name=path.stem)
+        sid = self._active_session_id()
+        if sid is not None:
+            info = self._state.session(sid)
+            if info is not None:
+                setup.operator = info.operator
+                setup.profile = info.profile.value
+                if info.device.protocol.startswith("iec104"):
+                    setup.connection.host = info.device.address.split(":")[0]
+                    import contextlib
+
+                    with contextlib.suppress(IndexError, ValueError):
+                        setup.connection.port = int(info.device.address.split(":")[1].split("/")[0])
+
+        try:
+            save_iec104_setup(setup, path)
+        except SetupError as exc:
+            QMessageBox.critical(self, self.tr("Save failed"), str(exc))
+            return
+        self.statusBar().showMessage(
+            self.tr("IEC\u00a0104 setup saved to {name}").format(name=path.name), 5000
+        )
+
+    def _load_iec104_setup(self) -> None:
+        """Tools → IEC 104 → Load IEC 104 Setup… — read and apply an iec104-setup.json."""
+        default_dir = str(Path.home() / ".protoskipper" / "setups")
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("Load IEC\u00a0104 Setup"),
+            default_dir,
+            "IEC\u00a0104 Setup files (*.json);;All files (*)",
+        )
+        if not path_str:
+            return
+        try:
+            setup = load_iec104_setup(path_str)
+        except SetupError as exc:
+            QMessageBox.critical(self, self.tr("Load failed"), str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                self.tr("Load failed"),
+                self.tr("Could not parse setup file: {e}").format(e=exc),
+            )
+            return
+
+        # Show confirmation with loaded parameters, then open new-connection dialog.
+        QMessageBox.information(
+            self,
+            self.tr("IEC\u00a0104 Setup Loaded"),
+            self.tr(
+                "Setup <b>{name}</b> loaded.\n\n"
+                "Host: {host}:{port}\n"
+                "Vendor profile: {profile}\n\n"
+                "Click OK, then use <i>New Connection\u2026</i> to connect."
+            ).format(
+                name=Path(path_str).stem,
+                host=setup.connection.host,
+                port=setup.connection.port,
+                profile=setup.vendor_profile,
+            ),
+        )
+        self._open_new_connection_dialog()
+        self.statusBar().showMessage(
+            self.tr("IEC\u00a0104 setup loaded from {name}").format(name=Path(path_str).name),
+            5000,
+        )
 
     def _on_preferences(self) -> None:
         """Tools → Preferences…"""
@@ -1114,8 +1451,17 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.Save:
                 self._on_save_setup()
         self._save_settings()
+        # Stop IEC 104 slave server if running.
+        if self._iec104_slave is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self._iec104_slave.stop()  # type: ignore[union-attr]
         try:
             self._session_manager.shutdown()
         except Exception:
             _logger.exception("Error during SessionManager shutdown; closing anyway")
+        # Stop the scripting console worker thread before Qt starts destroying
+        # child C++ objects; failing to do this causes an abort on macOS.
+        self._scripting_console._stop_thread()
         super().closeEvent(event)

@@ -1,0 +1,77 @@
+# IEC 60870-5-104 Command Conformance Profile
+# Tests each command type (direct + SBO) and verifies the full
+# ACT/ACT-CON/ACT-TERM lifecycle per the standard.
+
+id: command_conformance
+display_name: "Command Conformance (all types)"
+direction: master
+edition: "2.0+A1"
+profiles_allowed:
+  - lab
+
+tests:
+  - key: direct_sc
+    label: "Direct Single Command (C_SC_NA_1 type 45)"
+    description: >
+      Issues direct-execute C_SC_NA_1 for IOA=1 with value=ON.
+      Expects ACT-CON (positive) then ACT-TERM.
+    timeout_s: 15
+    mandatory: true
+
+  - key: sbo_sc
+    label: "SBO Single Command (C_SC_NA_1 type 45)"
+    description: >
+      Issues SELECT then EXECUTE C_SC_NA_1 IOA=1 value=ON.
+      Expects separate ACT-CON for SELECT; ACT-CON and ACT-TERM for EXECUTE.
+    timeout_s: 20
+    mandatory: true
+
+  - key: direct_dc
+    label: "Direct Double Command (C_DC_NA_1 type 46)"
+    description: >
+      Issues direct-execute C_DC_NA_1 IOA=2 with value=ON (DCS=2).
+      Expects ACT-CON and ACT-TERM.
+    timeout_s: 15
+    mandatory: false
+
+  - key: direct_rc
+    label: "Regulating Step Command (C_RC_NA_1 type 47)"
+    description: >
+      Issues direct-execute C_RC_NA_1 IOA=3 with RCS=1 (increment).
+      Expects ACT-CON and ACT-TERM.
+    timeout_s: 15
+    mandatory: false
+
+  - key: direct_se_f
+    label: "Set-Point Short Float (C_SE_NC_1 type 50)"
+    description: >
+      Issues direct-execute C_SE_NC_1 IOA=100 with float value 50.0.
+      Expects ACT-CON and ACT-TERM.
+    timeout_s: 15
+    mandatory: false
+
+  - key: direct_se_s
+    label: "Set-Point Scaled (C_SE_NB_1 type 49)"
+    description: >
+      Issues direct-execute C_SE_NB_1 IOA=101 with scaled value 32767.
+      Expects ACT-CON and ACT-TERM.
+    timeout_s: 15
+    mandatory: false
+
+  - key: negative_con
+    label: "Negative Command Confirmation"
+    description: >
+      Issues a command to a read-only IOA.  The slave must respond with
+      a negative ACT-CON (P/N=1) or an unknown-IOA COT.  The master
+      must not treat this as success.
+    timeout_s: 10
+    mandatory: true
+
+  - key: command_timeout
+    label: "Command Timeout Handling"
+    description: >
+      Issues a command and withholds S-frame ACK to trigger T1 timeout.
+      The master must report IEC104TimeoutError; subsequent commands must
+      work after reconnect.
+    timeout_s: 60
+    mandatory: false

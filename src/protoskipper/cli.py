@@ -38,6 +38,26 @@ def build_parser() -> argparse.ArgumentParser:
     sim.add_argument("--host", default="127.0.0.1", help="Bind address.")
     sim.add_argument("--port", type=int, default=5020, help="Bind port.")
 
+    run = sub.add_parser(
+        "run",
+        help="Execute a Python script in the ProtoSkipper scripting environment.",
+    )
+    run.add_argument("script", help="Path to the Python script to run.")
+    run.add_argument(
+        "--allow-writes",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow write/command operations from the script. "
+            "By default all writes are denied (PRODUCTION-safe mode)."
+        ),
+    )
+    run.add_argument(
+        "extra_args",
+        nargs=argparse.REMAINDER,
+        help="Extra arguments forwarded to the script as argv.",
+    )
+
     return parser
 
 
@@ -58,6 +78,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         parser.error(f"unknown simulator: {args.which}")
         return 2
+
+    if args.command == "run":
+        from pathlib import Path
+
+        from protoskipper.scripting import run_script
+
+        return run_script(
+            Path(args.script),
+            extra_argv=list(args.extra_args),
+            allow_writes=args.allow_writes,
+        )
 
     # Lazy import: keeps `--help` and `--version` fast and avoids dragging the
     # plugin loader into every shell completion invocation.

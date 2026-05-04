@@ -1,0 +1,18 @@
+# Generic / Reference IEC 60870-5-104 profile
+# Uses the default parameters from the standard (IEC 60870-5-104 Ed.2 Table 5).
+id: generic
+display_name: "Generic (IEC 60870-5-104 Ed.2 defaults)"
+ca_size: 2      # bytes for Common Address
+ioa_size: 3     # bytes for Information Object Address
+cot_size: 2     # bytes for Cause of Transmission (with originator)
+default_oa: 0   # Originator Address (0 = not used)
+k: 12           # max unacknowledged I-frames
+w: 8            # latest acknowledgement after w I-frames
+t0: 30          # connection timeout (seconds)
+t1: 15          # ACK timeout (seconds)
+t2: 10          # latest time for test frame (seconds)
+t3: 20          # long idle test period (seconds)
+quirks: []
+notes: >
+  Standard reference profile. Works with most IEC 104 slaves.
+  If the device does not respond, increase t1 or reduce k/w.

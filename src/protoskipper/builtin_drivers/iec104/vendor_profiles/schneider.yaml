@@ -1,0 +1,21 @@
+# Schneider Electric IEC 60870-5-104 profile
+id: schneider
+display_name: "Schneider Electric (MiCOM / EcoStruxure)"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 60
+t1: 20
+t2: 10
+t3: 40
+quirks:
+  - "long_gi_timeout"  # GI may take up to 60 s on large databases
+  - "sbo_mandatory"    # PRODUCTION mode must use SBO for all commands
+notes: >
+  Schneider MiCOM P-series relays and EcoStruxure line.
+  T0 must be ≥ 60 s because the MiCOM P-series has a slow boot cycle
+  and will not accept connections until its self-test completes.
+  SBO is mandatory in substation environments.

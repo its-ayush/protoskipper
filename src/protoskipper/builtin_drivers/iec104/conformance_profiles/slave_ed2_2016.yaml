@@ -1,0 +1,97 @@
+# IEC 60870-5-104 Ed.2 + 2016/A1 Slave Conformance Profile
+# Tests applied AGAINST a slave (RTU / IED) under test.
+
+id: slave_ed2_2016
+display_name: "Slave — IEC 60870-5-104 Ed.2 + 2016/A1"
+direction: slave
+edition: "2.0+A1"
+profiles_allowed:
+  - lab
+  - commissioning
+
+tests:
+  - key: gi
+    label: "General Interrogation Response"
+    description: >
+      ProtoSkipper issues C_IC_NA_1 QOI=20.
+      Slave must respond with ACT-CON (COT=7), all point data with COT=20,
+      and ACT-TERM (COT=10) within the configured timeout.
+    timeout_s: 60
+    mandatory: true
+
+  - key: ci
+    label: "Counter Interrogation Response"
+    description: >
+      ProtoSkipper issues C_CI_NA_1 QCC=5 (Global freeze+reset).
+      Slave must respond with ACT-CON and ACT-TERM; counter values must
+      use COT=37 (counter interrogation).
+    timeout_s: 30
+    mandatory: false
+
+  - key: clock_sync
+    label: "Clock Sync Response"
+    description: >
+      ProtoSkipper sends C_CS_NA_1 with current UTC time.
+      Slave must respond with ACT-CON.  After sync, timestamps in
+      spontaneous events must reflect the synchronised time.
+    timeout_s: 10
+    mandatory: true
+
+  - key: testfr
+    label: "TESTFR Response"
+    description: >
+      ProtoSkipper sends TESTFR ACT.
+      Slave must reply with TESTFR CON within T1 seconds.
+    timeout_s: 15
+    mandatory: true
+
+  - key: sbo_command
+    label: "SBO Command Lifecycle (C_SC_NA_1)"
+    description: >
+      ProtoSkipper sends SELECT C_SC_NA_1 then EXECUTE C_SC_NA_1 for IOA=1.
+      Slave must emit separate ACT-CON for SELECT and for EXECUTE,
+      and ACT-TERM after execution.  No EXECUTE before SELECT is accepted.
+    timeout_s: 20
+    mandatory: false
+    profiles_allowed:
+      - lab
+      - commissioning
+
+  - key: direct_command
+    label: "Direct Command (C_SC_NA_1)"
+    description: >
+      ProtoSkipper sends a direct-execute C_SC_NA_1 for IOA=1.
+      Slave must emit ACT-CON (positive) and ACT-TERM.
+    timeout_s: 15
+    mandatory: false
+    profiles_allowed:
+      - lab
+
+  - key: gi_conformance
+    label: "GI Data Quality"
+    description: >
+      After GI, all returned objects must have quality flags = 0.
+      Any IV (Invalid) bit set flags the point; the test PASSES if
+      the slave justifiably sets IV (e.g. sensor offline) but WARNS
+      if more than 10 % of points are invalid.
+    timeout_s: 60
+    mandatory: false
+
+  - key: t1_timeout
+    label: "T1 ACK-Timeout Handling"
+    description: >
+      ProtoSkipper deliberately withholds S-frame ACKs until T1 expires.
+      The slave must disconnect cleanly and not crash.  On reconnect
+      the slave must accept a new STARTDT and resume normally.
+    timeout_s: 60
+    mandatory: true
+    profiles_allowed:
+      - lab
+
+  - key: kw_window
+    label: "k/w Window Enforcement"
+    description: >
+      Slave must stop sending I-frames once k un-ACKed frames are outstanding
+      and resume only after ProtoSkipper sends an S-frame advancing the window.
+    timeout_s: 30
+    mandatory: true

@@ -1,0 +1,24 @@
+# Hitachi PSR100 / PSR200 Protection Relay — IEC 60870-5-104 profile
+id: hitachi_psr
+display_name: "Hitachi PSR100 / PSR200"
+ca_size: 2
+ioa_size: 3
+cot_size: 2
+default_oa: 0
+k: 12
+w: 8
+t0: 30
+t1: 15
+t2: 10
+t3: 20
+quirks:
+  - "hitachi-spontaneous-during-gi"  # Relay emits spontaneous events during GI; expect mixed COT
+  - "hitachi-cp24-legacy"            # Older firmware uses CP24Time2a (types 2-16) not CP56
+notes: >
+  Hitachi PSR series tested against firmware H3.x.
+  During General Interrogation the relay continues to emit spontaneous events
+  with COT=3 (spontaneous) interleaved with COT=20 (GI response); the master
+  must accept both simultaneously.
+  Older firmware revisions (< H2.5) use CP24Time2a timestamps (type IDs 2, 4,
+  6, 8, etc.) rather than CP56Time2a.  Check the relay's protocol settings
+  before assuming CP56 support.

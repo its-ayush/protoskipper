@@ -159,13 +159,20 @@ class WriteIntent:
 
 @dataclass(frozen=True)
 class WriteResult:
-    """Outcome of a committed write."""
+    """Outcome of a committed write.
+
+    ``metadata`` is an optional, free-form dict that drivers may populate
+    with protocol-specific outcome details (e.g. the reply COT and ASDU
+    type for IEC 60870-5-104 writes). It is recorded verbatim in the
+    audit log alongside the intent.
+    """
 
     intent: WriteIntent
     success: bool
     timestamp: datetime
     response_bytes: bytes | None = None
     error: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +254,7 @@ class SafetyContext:
                 event="write_committed",
                 intent=result.intent,
                 timestamp=result.timestamp,
+                outcome=dict(result.metadata) if result.metadata else None,
             )
         else:
             self._audit(
@@ -254,6 +262,7 @@ class SafetyContext:
                 intent=result.intent,
                 error=result.error,
                 timestamp=result.timestamp,
+                outcome=dict(result.metadata) if result.metadata else None,
             )
 
 
