@@ -1,5 +1,5 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
-"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 contract verification.
+"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 / P8.B.4 contract.
 
 Tests verify that:
 * The plugin package imports cleanly.
@@ -19,7 +19,12 @@ Tests verify that:
   - walks LD -> LN -> DO via MmsClient directory methods.
   - skips branches where a directory call raises ``MmsDirectoryError``.
   - emits ``ObjectRef`` with ``object_id = "LD/LN.DO"`` and ``data_type = "do"``.
-* Session stubs for P8.B.4-P8.B.5 still raise ``NotImplementedError``.
+* ``read`` (P8.B.4):
+  - DO-level refs: tries FC_MX -> FC_ST -> FC_SP; reads q and t sub-attrs.
+  - DA-level refs with ``[FC]`` suffix: single call, quality=UNKNOWN.
+  - Maps quality bits to Quality enum (GOOD/BAD/UNCERTAIN/SIMULATED).
+  - Returns BAD ReadResult (no raise) on all-FC-fail or no client.
+* Session stubs for P8.B.5 still raise ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -266,16 +271,19 @@ class TestSessionStubs:
         """No client -> enumerate_objects is a no-op generator."""
         assert list(session.enumerate_objects()) == []
 
-    def test_read_raises(self, session) -> None:  # type: ignore[no-untyped-def]
-        from protoskipper.core.driver import ObjectRef
+    def test_read_no_client_returns_bad(self, session) -> None:  # type: ignore[no-untyped-def]
+        """read() without an active client returns BAD quality, never raises."""
+        from protoskipper.core.driver import ObjectRef, Quality
 
         ref = ObjectRef(
             device=session.device,
-            object_id="LD0/MMXU1.MX.A.phsA.cVal.mag.f",
-            data_type="float32",
+            object_id="LD0/MMXU1.A",
+            data_type="do",
         )
-        with pytest.raises(NotImplementedError, match=r"P8\.B\.4"):
-            session.read(ref)
+        result = session.read(ref)
+        assert result.quality == Quality.BAD
+        assert result.error is not None
+        assert result.value is None
 
     def test_prepare_write_raises(self, session) -> None:  # type: ignore[no-untyped-def]
         from protoskipper.core.driver import ObjectRef
@@ -485,3 +493,164 @@ class TestEnumerateObjects:
             "LD0/MMXU1",
             0,  # ACSI_CLASS_DATA_OBJECT = 0
         )
+
+
+# ---------------------------------------------------------------------------
+# P8.B.4 - read with quality and timestamp
+# ---------------------------------------------------------------------------
+
+
+class TestRead:
+    """read() maps MmsDecodedValue fields to ReadResult quality/timestamp."""
+
+    @pytest.fixture
+    def session(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext, SessionProfile
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = SafetyContext(
+            profile=SessionProfile.LAB,
+            confirm_callback=lambda i, p: True,
+            audit_callback=lambda **_kw: None,
+        )
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    @pytest.fixture
+    def do_ref(self, session):  # type: ignore[no-untyped-def]
+        from protoskipper.core.driver import ObjectRef
+
+        return ObjectRef(device=session.device, object_id="LD0/MMXU1.A", data_type="do")
+
+    def _decoded(self, **kwargs):  # type: ignore[no-untyped-def]
+        from protoskipper_iec61850._mms_client import MmsDecodedValue
+
+        return MmsDecodedValue(value=3.14, **kwargs)
+
+    # -- DO-level reads -------------------------------------------------------
+
+    def test_do_good_quality(self, session, do_ref) -> None:
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=0, is_substituted=False, is_test=False, timestamp_ms=0
+        )
+        from protoskipper.core.driver import Quality
+
+        result = session.read(do_ref)
+        assert result.quality == Quality.GOOD
+        assert result.value == 3.14
+        assert result.error is None
+
+    def test_do_invalid_quality_returns_bad(self, session, do_ref) -> None:
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=1, is_substituted=False, is_test=False, timestamp_ms=0
+        )
+        from protoskipper.core.driver import Quality
+
+        assert session.read(do_ref).quality == Quality.BAD
+
+    def test_do_questionable_quality_returns_uncertain(self, session, do_ref) -> None:
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=3, is_substituted=False, is_test=False, timestamp_ms=0
+        )
+        from protoskipper.core.driver import Quality
+
+        assert session.read(do_ref).quality == Quality.UNCERTAIN
+
+    def test_do_substituted_returns_simulated(self, session, do_ref) -> None:
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=0, is_substituted=True, is_test=False, timestamp_ms=0
+        )
+        from protoskipper.core.driver import Quality
+
+        assert session.read(do_ref).quality == Quality.SIMULATED
+
+    def test_do_timestamp_from_ms(self, session, do_ref) -> None:
+        """timestamp_ms=1_000_000 ms (1000 s after epoch) produces correct datetime."""
+        import datetime as dt
+
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=0, is_substituted=False, is_test=False, timestamp_ms=1_000_000
+        )
+        result = session.read(do_ref)
+        expected = dt.datetime(1970, 1, 1, 0, 16, 40, tzinfo=dt.timezone.utc)
+        assert result.timestamp == expected
+
+    def test_do_zero_ts_falls_back_to_now(self, session, do_ref) -> None:
+        """timestamp_ms=0 -> timestamp is approximately now."""
+        import datetime as dt
+
+        session._client.read_do_with_meta.return_value = self._decoded(
+            quality_validity=0, is_substituted=False, is_test=False, timestamp_ms=0
+        )
+        before = dt.datetime.now(tz=dt.timezone.utc)
+        result = session.read(do_ref)
+        after = dt.datetime.now(tz=dt.timezone.utc)
+        assert before <= result.timestamp <= after
+
+    def test_do_fc_fallback_mx_then_st(self, session, do_ref) -> None:
+        """When FC_MX fails, read() retries with FC_ST."""
+        from protoskipper_iec61850._mms_client import MmsDecodedValue, MmsDirectoryError
+
+        session._client.read_do_with_meta.side_effect = [
+            MmsDirectoryError("object not found", error_code=17),
+            MmsDecodedValue(value=True, quality_validity=0),
+        ]
+        from protoskipper.core.driver import Quality
+
+        result = session.read(do_ref)
+        assert result.quality == Quality.GOOD
+        assert result.value is True
+        assert session._client.read_do_with_meta.call_count == 2
+
+    def test_do_all_fc_fail_returns_bad(self, session, do_ref) -> None:
+        """All three FC attempts fail -> BAD quality ReadResult, no exception."""
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        session._client.read_do_with_meta.side_effect = MmsDirectoryError("timeout", error_code=14)
+        from protoskipper.core.driver import Quality
+
+        result = session.read(do_ref)
+        assert result.quality == Quality.BAD
+        assert result.error is not None
+        assert result.value is None
+        assert session._client.read_do_with_meta.call_count == 3  # MX, ST, SP
+
+    # -- DA-level reads with [FC] suffix -------------------------------------
+
+    def test_da_explicit_fc_reads_single_attribute(self, session) -> None:
+        """object_id with [MX] suffix -> read_object called once, quality=UNKNOWN."""
+        from protoskipper_iec61850._mms_client import FC_MX, MmsDecodedValue
+
+        from protoskipper.core.driver import ObjectRef, Quality
+
+        ref = ObjectRef(
+            device=session.device,
+            object_id="LD0/MMXU1.A.phsA.cVal.mag.f[MX]",
+            data_type="float32",
+        )
+        session._client.read_object.return_value = MmsDecodedValue(value=230.5)
+        result = session.read(ref)
+        assert result.quality == Quality.UNKNOWN
+        assert result.value == 230.5
+        session._client.read_object.assert_called_once_with("LD0/MMXU1.A.phsA.cVal.mag.f", FC_MX)
+        session._client.read_do_with_meta.assert_not_called()
+
+    def test_da_explicit_fc_error_returns_bad(self, session) -> None:
+        """MmsDirectoryError on a DA-level read -> BAD quality, no exception."""
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        from protoskipper.core.driver import ObjectRef, Quality
+
+        ref = ObjectRef(
+            device=session.device,
+            object_id="LD0/MMXU1.A.phsA.cVal.mag.f[ST]",
+            data_type="float32",
+        )
+        session._client.read_object.side_effect = MmsDirectoryError("access denied", error_code=11)
+        result = session.read(ref)
+        assert result.quality == Quality.BAD
+        assert result.error is not None

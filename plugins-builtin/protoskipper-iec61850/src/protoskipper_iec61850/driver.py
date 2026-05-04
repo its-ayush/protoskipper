@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Iterator
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from protoskipper.core.driver import (
@@ -42,6 +43,7 @@ from protoskipper.core.driver import (
     DriverSession,
     ObjectRef,
     ProtocolDriver,
+    Quality,
     ReadResult,
     SafetyContext,
     WriteIntent,
@@ -51,8 +53,12 @@ from protoskipper.core.errors import ConnectionFailure, EncodingError
 
 from protoskipper_iec61850._mms_client import (
     ACSI_CLASS_DATA_OBJECT,
+    FC_MX,
+    FC_SP,
+    FC_ST,
     MmsClient,
     MmsConnectError,
+    MmsDecodedValue,
     MmsDirectoryError,
 )
 
@@ -87,6 +93,50 @@ def _host_port_from_address(address: str) -> tuple[str, int]:
     base = address.split("?")[0]
     host, _, port_str = base.rpartition(":")
     return host, int(port_str)
+
+
+# FC suffix pattern: "[MX]", "[ST]", "[SP]", etc.
+_FC_SUFFIX_RE = re.compile(r"\[(?P<fc>[A-Z]{2,3})\]$")
+
+# Map FC string names to integer FC codes
+_FC_NAME_TO_INT: dict[str, int] = {
+    "ST": FC_ST,
+    "MX": FC_MX,
+    "SP": FC_SP,
+}
+
+
+def _parse_object_id_fc(object_id: str) -> tuple[str, int | None]:
+    """Split a ``[FC]`` suffix from *object_id*.
+
+    Returns ``(clean_ref, fc_int)`` where *fc_int* is ``None`` when no
+    recognised FC suffix is present (DO-level ref from enumerate_objects).
+    """
+    m = _FC_SUFFIX_RE.search(object_id)
+    if m:
+        clean = object_id[: m.start()]
+        fc = _FC_NAME_TO_INT.get(m.group("fc"))
+        return clean, fc
+    return object_id, None
+
+
+def _quality_from_decoded(decoded: MmsDecodedValue) -> Quality:
+    """Map an :class:`MmsDecodedValue` quality fields to :class:`Quality`."""
+    if decoded.is_substituted:
+        return Quality.SIMULATED
+    validity = decoded.quality_validity
+    if validity == 0:
+        return Quality.GOOD
+    if validity == 3:  # questionable
+        return Quality.UNCERTAIN
+    return Quality.BAD  # invalid (1) or reserved (2)
+
+
+def _ts_from_ms(ts_ms: int) -> datetime:
+    """Convert milliseconds since Unix epoch to an aware UTC datetime."""
+    if ts_ms == 0:
+        return datetime.now(tz=timezone.utc)
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -244,13 +294,75 @@ class Iec61850MmsSession(DriverSession):
                     )
 
     def read(self, ref: ObjectRef) -> ReadResult:
-        """Read a single data attribute.
+        """Read a single data object or data attribute.
 
-        .. note::
-            Not yet implemented (P8.B.4).
+        The ``object_id`` on *ref* may be:
+
+        * A **data object** reference (from :meth:`enumerate_objects`) such as
+          ``"LD0/MMXU1.A"`` -- no ``[FC]`` suffix.  The method tries FC_MX,
+          FC_ST, FC_SP in turn until one succeeds, then also reads the ``.q``
+          and ``.t`` sub-attributes for quality and timestamp.
+        * A **data attribute** reference with an explicit FC suffix such as
+          ``"LD0/LLN0.Mod.stVal[ST]"``.  The FC is used directly; quality
+          defaults to :attr:`~protoskipper.core.driver.Quality.UNKNOWN` and
+          timestamp to the current wall time (DA-level reads without the full
+          DO context cannot reliably locate the sibling ``q`` / ``t``).
+
+        Returns a :class:`~protoskipper.core.driver.ReadResult` whose
+        ``quality`` is :attr:`~protoskipper.core.driver.Quality.BAD` and
+        ``error`` is set when the read fails; it never raises.
         """
-        raise NotImplementedError(
-            "IEC 61850 read is not yet implemented.  See P8.B.4 in docs/internal/EXECUTION_PLAN.md."
+        if self._client is None:
+            return ReadResult(
+                object_ref=ref,
+                value=None,
+                quality=Quality.BAD,
+                timestamp=datetime.now(tz=timezone.utc),
+                error="Session has no active MMS client",
+            )
+
+        clean_id, explicit_fc = _parse_object_id_fc(ref.object_id)
+
+        if explicit_fc is not None:
+            # DA-level read: single call, no q/t extraction
+            try:
+                decoded = self._client.read_object(clean_id, explicit_fc)
+            except MmsDirectoryError as exc:
+                return ReadResult(
+                    object_ref=ref,
+                    value=None,
+                    quality=Quality.BAD,
+                    timestamp=datetime.now(tz=timezone.utc),
+                    error=str(exc),
+                )
+            return ReadResult(
+                object_ref=ref,
+                value=decoded.value,
+                quality=Quality.UNKNOWN,
+                timestamp=datetime.now(tz=timezone.utc),
+            )
+
+        # DO-level read: infer FC by trying MX -> ST -> SP
+        last_error: str = "all FC attempts failed"
+        for try_fc in (FC_MX, FC_ST, FC_SP):
+            try:
+                decoded = self._client.read_do_with_meta(clean_id, try_fc)
+                return ReadResult(
+                    object_ref=ref,
+                    value=decoded.value,
+                    quality=_quality_from_decoded(decoded),
+                    timestamp=_ts_from_ms(decoded.timestamp_ms),
+                )
+            except MmsDirectoryError as exc:
+                last_error = str(exc)
+                _logger.debug("read(%r) FC=%d failed: %s; trying next FC", clean_id, try_fc, exc)
+
+        return ReadResult(
+            object_ref=ref,
+            value=None,
+            quality=Quality.BAD,
+            timestamp=datetime.now(tz=timezone.utc),
+            error=last_error,
         )
 
     def prepare_write(self, ref: ObjectRef, value: Any) -> WriteIntent:

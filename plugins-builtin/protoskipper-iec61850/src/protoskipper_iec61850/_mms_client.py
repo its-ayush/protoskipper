@@ -26,8 +26,11 @@ Public API
 
 Constants
 ---------
-* ``ACSI_CLASS_DATA_OBJECT`` … ``ACSI_CLASS_MsCB`` — ACSI class integers
+* ``ACSI_CLASS_DATA_OBJECT`` ... ``ACSI_CLASS_MsCB`` -- ACSI class integers
   passed to :meth:`MmsClient.get_logical_node_directory`.
+* ``FC_ST`` ... ``FC_NONE`` -- Functional constraint integers for read/write
+  calls (``IEC61850_FC_*`` from libiec61850).
+* :class:`MmsDecodedValue` -- decoded result of :meth:`MmsClient.read_object`.
 
 Thread safety
 -------------
@@ -38,6 +41,7 @@ A :class:`MmsClient` instance must be used from a single thread only.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from protoskipper.core.errors import ConnectionFailure, DriverError
@@ -60,7 +64,50 @@ ACSI_CLASS_GsCB: int = 8
 ACSI_CLASS_MsCB: int = 9
 
 # ---------------------------------------------------------------------------
-# IedClientError code → human-readable name
+# Functional constraint (FC) constants
+# (IEC61850_FC_* from libiec61850 ied_client_api.h)
+# ---------------------------------------------------------------------------
+FC_ST: int = 0  # Status
+FC_MX: int = 1  # Measured value
+FC_SP: int = 2  # Setting (persistent)
+FC_SV: int = 3  # Substitution value
+FC_CF: int = 4  # Configuration
+FC_DC: int = 5  # Description
+FC_SG: int = 6  # Setting group (active)
+FC_SE: int = 7  # Setting group (editable)
+FC_SR: int = 8  # Service response
+FC_OR: int = 9  # Operate received
+FC_BL: int = 10  # Blocking
+FC_EX: int = 11  # Extended
+FC_CO: int = 12  # Control output
+FC_NONE: int = -1  # No specific FC
+
+# ---------------------------------------------------------------------------
+# Quality bit positions (for MmsValue_getBitStringBit)
+# IEC 61850-7-2 quality bitstring encoding
+# ---------------------------------------------------------------------------
+_Q_VALIDITY_BIT0: int = 0  # MSB of 2-bit validity: 0=good,1=invalid,2=reserved,3=questionable
+_Q_VALIDITY_BIT1: int = 1  # LSB of 2-bit validity
+_Q_SOURCE_SUBSTITUTED: int = 12  # source=substituted -> SIMULATED
+_Q_TEST: int = 13  # test bit
+
+# ---------------------------------------------------------------------------
+# MMS type constants (MmsType enum from libiec61850 mms_value.h)
+# ---------------------------------------------------------------------------
+_MMS_ARRAY: int = 0
+_MMS_STRUCTURE: int = 1
+_MMS_BOOLEAN: int = 2
+_MMS_BIT_STRING: int = 3
+_MMS_INTEGER: int = 4
+_MMS_UNSIGNED: int = 5
+_MMS_FLOAT: int = 6
+_MMS_OCTET_STRING: int = 7
+_MMS_VISIBLE_STRING: int = 8
+_MMS_STRING: int = 13
+_MMS_UTC_TIME: int = 14
+
+# ---------------------------------------------------------------------------
+# IedClientError code -> human-readable name
 # (values from libiec61850 ied_client_api.h)
 # ---------------------------------------------------------------------------
 _IED_ERROR_NAMES: dict[int, str] = {
@@ -91,6 +138,93 @@ _IED_ERROR_NAMES: dict[int, str] = {
 
 def _ied_error_name(code: int) -> str:
     return _IED_ERROR_NAMES.get(code, f"IED_ERROR_UNKNOWN({code})")
+
+
+# ---------------------------------------------------------------------------
+# MmsValue decoding helpers (P8.B.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class MmsDecodedValue:
+    """Result of :meth:`MmsClient.read_object`.
+
+    Attributes
+    ----------
+    value:
+        Decoded Python primitive: ``float``, ``int``, ``bool``, ``str``, or
+        a ``list`` for structures/arrays.  ``None`` if the read failed or the
+        type is unrecognised.
+    quality_validity:
+        IEC 61850 validity field (0 = good, 1 = invalid, 2 = reserved,
+        3 = questionable).  Always 0 for non-quality attributes.
+    is_substituted:
+        ``True`` when the quality ``source`` bit is set (value is substituted
+        / simulated).  Always ``False`` for non-quality attributes.
+    is_test:
+        ``True`` when the quality ``test`` bit is set.
+    timestamp_ms:
+        Milliseconds since the Unix epoch from the ``t`` attribute.
+        0 when not available.
+    """
+
+    value: Any
+    quality_validity: int = 0
+    is_substituted: bool = False
+    is_test: bool = False
+    timestamp_ms: int = 0
+
+
+def _mms_value_to_python(lib: Any, val: Any) -> Any:
+    """Recursively convert a pyiec61850 ``MmsValue`` to a Python object.
+
+    Caller is responsible for calling ``MmsValue_delete`` on *val* after use.
+    Returns ``None`` for unrecognised types or if *val* is ``None``.
+    """
+    if val is None:
+        return None
+    typ = lib.MmsValue_getType(val)
+    if typ == _MMS_BOOLEAN:
+        return bool(lib.MmsValue_getBoolean(val))
+    if typ == _MMS_INTEGER:
+        return int(lib.MmsValue_toInt32(val))
+    if typ == _MMS_UNSIGNED:
+        return int(lib.MmsValue_toUint32(val))
+    if typ == _MMS_FLOAT:
+        return float(lib.MmsValue_toFloat(val))
+    if typ in (_MMS_VISIBLE_STRING, _MMS_STRING):
+        return str(lib.MmsValue_toString(val))
+    if typ == _MMS_BIT_STRING:
+        return int(lib.MmsValue_getBitStringAsInteger(val))
+    if typ == _MMS_UTC_TIME:
+        return int(lib.MmsValue_getUtcTimeInMs(val))
+    if typ in (_MMS_ARRAY, _MMS_STRUCTURE):
+        n = lib.MmsValue_getArraySize(val)
+        return [_mms_value_to_python(lib, lib.MmsValue_getElement(val, i)) for i in range(n)]
+    _log.debug("Unrecognised MmsType %d; returning None", typ)
+    return None
+
+
+def _decode_q_bits(lib: Any, q_val: Any) -> tuple[int, bool, bool]:
+    """Extract ``(validity, is_substituted, is_test)`` from a quality MmsValue.
+
+    Uses ``MmsValue_getBitStringBit`` so the result is independent of how
+    libiec61850 packs the bit string into an integer.
+
+    Returns ``(0, False, False)`` on any failure.
+    """
+    if q_val is None:
+        return 0, False, False
+    try:
+        b0 = bool(lib.MmsValue_getBitStringBit(q_val, _Q_VALIDITY_BIT0))
+        b1 = bool(lib.MmsValue_getBitStringBit(q_val, _Q_VALIDITY_BIT1))
+        validity = (int(b0) << 1) | int(b1)
+        substituted = bool(lib.MmsValue_getBitStringBit(q_val, _Q_SOURCE_SUBSTITUTED))
+        is_test = bool(lib.MmsValue_getBitStringBit(q_val, _Q_TEST))
+        return validity, substituted, is_test
+    except Exception:
+        _log.debug("Failed to decode quality MmsValue", exc_info=True)
+        return 0, False, False
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +473,138 @@ class MmsClient:
     def is_connected(self) -> bool:
         """``True`` if :meth:`connect` has been called and :meth:`close` has not."""
         return self._con is not None
+
+    # ------------------------------------------------------------------
+    # Read services (P8.B.4)
+    # ------------------------------------------------------------------
+    #
+    # ``IedConnection_readObject`` takes a data reference (in dot notation,
+    # e.g. ``"LD0/MMXU1.A"`` or ``"LD0/LLN0.Mod.stVal"``) and an FC
+    # integer, and returns ``(MmsValue, IedClientError)`` via the SWIG
+    # OUTPUT typemap for ``IedClientError*``.
+
+    def read_object(self, object_ref: str, fc: int) -> MmsDecodedValue:
+        """Read a single data object or data attribute.
+
+        Parameters
+        ----------
+        object_ref:
+            IEC 61850 data reference in dot notation, e.g.
+            ``"LD0/MMXU1.A"`` or ``"LD0/LLN0.Mod.stVal"``.
+            Must **not** include a ``[FC]`` suffix.
+        fc:
+            Functional constraint (one of the ``FC_*`` module constants).
+
+        Returns
+        -------
+        MmsDecodedValue
+            ``quality_validity``, ``is_substituted``, ``is_test``, and
+            ``timestamp_ms`` are all 0 / ``False``; this method only decodes
+            the raw value.  Use :meth:`read_do_with_meta` to populate those.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK error code.
+        """
+        lib = self._lib
+        mms_val, error = lib.IedConnection_readObject(self._con, object_ref, fc)
+        if error != lib.IED_ERROR_OK:
+            if mms_val is not None:
+                lib.MmsValue_delete(mms_val)
+            raise MmsDirectoryError(
+                f"ReadObject({object_ref!r}, FC={fc}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        try:
+            python_val = _mms_value_to_python(lib, mms_val)
+        finally:
+            if mms_val is not None:
+                lib.MmsValue_delete(mms_val)
+        return MmsDecodedValue(value=python_val)
+
+    def _read_q(self, q_ref: str, fc: int) -> tuple[int, bool, bool]:
+        """Internal: read a quality attribute and decode its bits.
+
+        Returns ``(0, False, False)`` on any error so callers never raise.
+        """
+        lib = self._lib
+        try:
+            mms_q, error = lib.IedConnection_readObject(self._con, q_ref, fc)
+            if error != lib.IED_ERROR_OK or mms_q is None:
+                if mms_q is not None:
+                    lib.MmsValue_delete(mms_q)
+                return 0, False, False
+            try:
+                return _decode_q_bits(lib, mms_q)
+            finally:
+                lib.MmsValue_delete(mms_q)
+        except Exception:
+            _log.debug("Failed to read quality %r", q_ref, exc_info=True)
+            return 0, False, False
+
+    def _read_ts_ms(self, t_ref: str, fc: int) -> int:
+        """Internal: read a timestamp attribute and return ms since epoch.
+
+        Returns 0 on any error so callers never raise.
+        """
+        lib = self._lib
+        try:
+            mms_t, error = lib.IedConnection_readObject(self._con, t_ref, fc)
+            if error != lib.IED_ERROR_OK or mms_t is None:
+                if mms_t is not None:
+                    lib.MmsValue_delete(mms_t)
+                return 0
+            try:
+                ts = _mms_value_to_python(lib, mms_t)
+            finally:
+                lib.MmsValue_delete(mms_t)
+            return int(ts) if ts is not None else 0
+        except Exception:
+            _log.debug("Failed to read timestamp %r", t_ref, exc_info=True)
+            return 0
+
+    def read_do_with_meta(self, do_ref: str, fc: int) -> MmsDecodedValue:
+        """Read a data object plus its standard ``q`` and ``t`` sub-attributes.
+
+        Issues three separate ``IedConnection_readObject`` calls:
+
+        1. ``do_ref`` with *fc* -- the value.
+        2. ``do_ref + ".q"`` with *fc* -- quality bit string.
+        3. ``do_ref + ".t"`` with *fc* -- UTC timestamp.
+
+        Quality and timestamp reads are best-effort: errors are logged at
+        DEBUG level and result in zero / False defaults.
+
+        Parameters
+        ----------
+        do_ref:
+            Data object reference, e.g. ``"LD0/MMXU1.A"`` or
+            ``"LD0/LLN0.Mod"``.  Must not include a ``[FC]`` suffix.
+        fc:
+            Functional constraint for all three reads.
+
+        Returns
+        -------
+        MmsDecodedValue
+            All fields populated; ``value`` may be a ``list`` for structured
+            DOs (elements are anonymous -- their names come from the SCL).
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the primary value read fails.
+        """
+        decoded = self.read_object(do_ref, fc)
+        validity, substituted, is_test = self._read_q(f"{do_ref}.q", fc)
+        ts_ms = self._read_ts_ms(f"{do_ref}.t", fc)
+        return MmsDecodedValue(
+            value=decoded.value,
+            quality_validity=validity,
+            is_substituted=substituted,
+            is_test=is_test,
+            timestamp_ms=ts_ms,
+        )
 
     # ------------------------------------------------------------------
     # Directory services (P8.B.3)
