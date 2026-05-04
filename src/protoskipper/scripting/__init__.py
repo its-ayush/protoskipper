@@ -97,6 +97,13 @@ def _make_namespace(script_path: Path, extra_argv: list[str], allow_writes: bool
     ns["iec104"] = _make_iec104_ns(allow_writes)
 
     try:
+        from protoskipper.scripting.iec61850 import make_iec61850_ns
+
+        ns["iec61850"] = make_iec61850_ns(allow_writes)
+    except Exception:
+        ns["iec61850"] = None
+
+    try:
         modbus_mod = __import__("protoskipper.builtin_drivers.modbus", fromlist=[""])
         ns["modbus"] = modbus_mod
     except ImportError:
