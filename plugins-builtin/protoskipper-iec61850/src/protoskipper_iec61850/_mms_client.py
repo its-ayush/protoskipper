@@ -40,7 +40,6 @@ A :class:`MmsClient` instance must be used from a single thread only.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -1649,21 +1648,15 @@ class MmsClient:
             If the IED returns a non-OK ``IedClientError``.
         """
         lib = self._lib
-        chunks: list[bytes] = []
-
-        def _handler(buffer: Any, bytes_read: int) -> bool:
-            """Accumulate received data chunks into *chunks*."""
-            with contextlib.suppress(Exception):
-                chunks.append(bytes(bytearray(buffer[:bytes_read])))
-            return True  # continue download
-
-        _total, error = lib.IedConnection_getFile(self._con, remote_path, _handler, None)
+        # IedGetFileBytes is a C shim that wraps IedConnection_getFile with a
+        # C callback — SWIG cannot pass a Python callable as IedClientGetFileHandler.
+        data, error = lib.IedGetFileBytes(self._con, remote_path)
         if error != lib.IED_ERROR_OK:
             raise MmsDirectoryError(
                 f"GetFile({remote_path!r}) failed: {_ied_error_name(error)}",
                 error_code=error,
             )
-        return b"".join(chunks)
+        return data
 
     def delete_file(self, remote_path: str) -> None:
         """Delete a file from the IED's virtual file store.

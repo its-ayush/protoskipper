@@ -1294,40 +1294,35 @@ class TestMmsClientListFiles:
 
 
 class TestMmsClientGetFile:
-    """MmsClient.get_file() wraps IedConnection_getFile."""
+    """MmsClient.get_file() delegates to the IedGetFileBytes C shim."""
 
     def _make_client(self):  # type: ignore[no-untyped-def]
         client = _make_mock_client_with_internals()
         lib = client._lib
-        lib.IedConnection_getFile.return_value = (0, 0)
+        lib.IedGetFileBytes.return_value = (b"", 0)
         return client, lib
 
-    def test_returns_empty_bytes_when_no_chunks(self) -> None:
+    def test_returns_empty_bytes_when_no_data(self) -> None:
         client, _lib = self._make_client()
         result = client.get_file("COMTRADE/fault01.cfg")
         assert result == b""
 
-    def test_handler_accumulates_chunks_into_bytes(self) -> None:
+    def test_returns_file_bytes_on_success(self) -> None:
         client, lib = self._make_client()
-
-        captured_handler = None
-
-        def _capture_getfile(con, filename, handler, param):  # type: ignore[no-untyped-def]
-            nonlocal captured_handler
-            captured_handler = handler
-            handler(bytearray(b"Hello, "), 7)
-            handler(bytearray(b"world!"), 6)
-            return (13, 0)
-
-        lib.IedConnection_getFile.side_effect = _capture_getfile
+        lib.IedGetFileBytes.return_value = (b"Hello, world!", 0)
         result = client.get_file("COMTRADE/data.cfg")
         assert result == b"Hello, world!"
+
+    def test_shim_called_with_correct_args(self) -> None:
+        client, lib = self._make_client()
+        client.get_file("COMTRADE/data.cfg")
+        lib.IedGetFileBytes.assert_called_once_with(client._con, "COMTRADE/data.cfg")
 
     def test_raises_mms_directory_error_on_ied_error(self) -> None:
         from protoskipper_iec61850._mms_client import MmsDirectoryError
 
         client, lib = self._make_client()
-        lib.IedConnection_getFile.return_value = (0, 20)  # IED_ERROR_TIMEOUT
+        lib.IedGetFileBytes.return_value = (b"", 20)  # IED_ERROR_TIMEOUT
         with pytest.raises(MmsDirectoryError):
             client.get_file("MISSING.cfg")
 
