@@ -1,0 +1,159 @@
+profile_id: mms_ed21
+edition: "2.1"
+category: "MMS Client"
+description: "IEC 61850-8-1 Ed 2.1 MMS client conformance tests (abbreviated)"
+
+tests:
+  - id: TC_MMS_001
+    name: "Initiate connection"
+    description: >
+      The client shall successfully initiate an ACSE/MMS association
+      on port 102.  The server must respond with an InitiateResponse.
+    service: Initiate
+    severity: MANDATORY
+    preconditions:
+      - "Server reachable on TCP port 102"
+    steps:
+      - action: connect
+        params:
+          port: 102
+      - action: assert_connection
+        params:
+          status: connected
+
+  - id: TC_MMS_002
+    name: "GetNameList — Domain scope"
+    description: >
+      The client issues a GetNameList with objectClass=Domain,
+      objectScope=DomainSpecific.  The server must return a non-empty list.
+    service: GetNameList
+    severity: MANDATORY
+    preconditions:
+      - "TC_MMS_001 passed"
+    steps:
+      - action: GetNameList
+        params:
+          objectClass: Domain
+          objectScope: DomainSpecific
+      - action: assert_response
+        params:
+          status: success
+          has_items: true
+
+  - id: TC_MMS_003
+    name: "GetNameList — NamedVariable scope"
+    description: >
+      For each domain returned by TC_MMS_002, the client issues a
+      GetNameList for all NamedVariable objects.
+    service: GetNameList
+    severity: MANDATORY
+    preconditions:
+      - "TC_MMS_002 passed"
+    steps:
+      - action: GetNameList
+        params:
+          objectClass: NamedVariable
+          objectScope: DomainSpecific
+      - action: assert_response
+        params:
+          status: success
+
+  - id: TC_MMS_004
+    name: "GetVariableAccessAttributes — data object"
+    description: >
+      The client issues GetVariableAccessAttributes for a well-known
+      data object.  The server must return type description.
+    service: GetVariableAccessAttributes
+    severity: MANDATORY
+    preconditions:
+      - "TC_MMS_002 passed"
+    steps:
+      - action: GetVariableAccessAttributes
+        params:
+          domain: "@first_domain"
+          item_id: "@first_variable"
+      - action: assert_response
+        params:
+          status: success
+          has_type_description: true
+
+  - id: TC_MMS_005
+    name: "Read — single data attribute"
+    description: >
+      The client reads a single data attribute value.  The server
+      must return a valid MMS data value.
+    service: Read
+    severity: MANDATORY
+    preconditions:
+      - "TC_MMS_004 passed"
+    steps:
+      - action: Read
+        params:
+          domain: "@first_domain"
+          item_id: "@first_variable"
+      - action: assert_response
+        params:
+          status: success
+          has_value: true
+
+  - id: TC_MMS_006
+    name: "Read — FC=ST data attribute"
+    description: >
+      The client reads an FC=ST (Status) functional constrained attribute.
+    service: Read
+    severity: MANDATORY
+    steps:
+      - action: Read
+        params:
+          fc: ST
+      - action: assert_response
+        params:
+          status: success
+
+  - id: TC_MMS_007
+    name: "Write — single data attribute"
+    description: >
+      The client writes a value to a writable data attribute.  The
+      server must accept the write and confirm with a WriteResponse.
+    service: Write
+    severity: OPTIONAL
+    tags: ["write"]
+    steps:
+      - action: Write
+        params:
+          domain: "@first_domain"
+          item_id: "@first_writable_variable"
+          value: "@test_value"
+      - action: assert_response
+        params:
+          status: success
+
+  - id: TC_MMS_008
+    name: "GetNameList — NamedVariableList"
+    description: >
+      The client issues GetNameList for NamedVariableLists (datasets).
+    service: GetNameList
+    severity: OPTIONAL
+    steps:
+      - action: GetNameList
+        params:
+          objectClass: NamedVariableList
+          objectScope: DomainSpecific
+      - action: assert_response
+        params:
+          status: success
+
+  - id: TC_MMS_009
+    name: "Conclude connection gracefully"
+    description: >
+      The client issues a ConcludeRequest.  The server must respond
+      with ConcludeResponse.
+    service: Conclude
+    severity: MANDATORY
+    steps:
+      - action: disconnect
+        params:
+          graceful: true
+      - action: assert_connection
+        params:
+          status: disconnected

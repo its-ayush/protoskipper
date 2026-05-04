@@ -1,0 +1,92 @@
+profile_id: goose_pub_ed21
+edition: "2.1"
+category: "GOOSE Publisher"
+description: "IEC 61850-8-1 Ed 2.1 GOOSE publisher conformance tests (abbreviated)"
+
+tests:
+  - id: TC_GOOSE_PUB_001
+    name: "GOOSE publication on state change"
+    description: >
+      When a state change occurs, the publisher must retransmit the GOOSE
+      message at least once within timeAllowedtoLive / 2.
+    service: GOOSE
+    severity: MANDATORY
+    steps:
+      - action: subscribe_goose
+        params:
+          interface: "@capture_interface"
+      - action: trigger_state_change
+      - action: assert_goose_received
+        params:
+          max_delay_ms: 500
+          st_num_incremented: true
+
+  - id: TC_GOOSE_PUB_002
+    name: "GOOSE retransmission burst"
+    description: >
+      After a state change, the publisher must send a burst of at least
+      3 retransmissions with incrementing sqNum and the same stNum.
+    service: GOOSE
+    severity: MANDATORY
+    steps:
+      - action: trigger_state_change
+      - action: collect_goose_frames
+        params:
+          duration_ms: 3000
+      - action: assert_goose_burst
+        params:
+          min_frames: 3
+          same_st_num: true
+          sq_num_incrementing: true
+
+  - id: TC_GOOSE_PUB_003
+    name: "GOOSE steady-state retransmission"
+    description: >
+      In steady state, the publisher must retransmit at least once
+      within timeAllowedtoLive.
+    service: GOOSE
+    severity: MANDATORY
+    steps:
+      - action: collect_goose_frames
+        params:
+          duration_ms: 10000
+      - action: assert_goose_interval
+        params:
+          max_gap_ms: "@time_allowed_to_live"
+
+  - id: TC_GOOSE_PUB_004
+    name: "GOOSE test bit set in simulation mode"
+    description: >
+      When the IED is in simulation mode, the GOOSE test bit must be set.
+    service: GOOSE
+    severity: CONDITIONAL
+    tags: ["simulation"]
+    steps:
+      - action: enable_simulation_mode
+      - action: collect_goose_frames
+        params:
+          duration_ms: 2000
+      - action: assert_goose_field
+        params:
+          field: test
+          value: true
+
+  - id: TC_GOOSE_PUB_005
+    name: "GOOSE confRev matches GoCB"
+    description: >
+      The confRev field in each GOOSE frame must match the confRev attribute
+      in the GoCB as reported via MMS.
+    service: GOOSE
+    severity: MANDATORY
+    steps:
+      - action: read_mms_attribute
+        params:
+          fc: CF
+          attribute: ConfRev
+      - action: collect_goose_frames
+        params:
+          duration_ms: 2000
+      - action: assert_goose_field
+        params:
+          field: confRev
+          value: "@mms_ConfRev"
