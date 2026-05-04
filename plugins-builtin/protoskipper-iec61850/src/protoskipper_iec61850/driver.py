@@ -31,11 +31,13 @@ P8.B.x sub-task that implements it.  The goal is:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterator
 from typing import Any, ClassVar
 
 from protoskipper.core.driver import (
+    Access,
     DeviceRef,
     DriverSession,
     ObjectRef,
@@ -47,7 +49,14 @@ from protoskipper.core.driver import (
 )
 from protoskipper.core.errors import ConnectionFailure, EncodingError
 
-from protoskipper_iec61850._mms_client import MmsClient, MmsConnectError
+from protoskipper_iec61850._mms_client import (
+    ACSI_CLASS_DATA_OBJECT,
+    MmsClient,
+    MmsConnectError,
+    MmsDirectoryError,
+)
+
+_logger = logging.getLogger(__name__)
 
 __all__ = ["Iec61850MmsDriver", "Iec61850MmsSession"]
 
@@ -184,17 +193,55 @@ class Iec61850MmsSession(DriverSession):
         return self._client.peer_implementation if self._client else ""
 
     def enumerate_objects(self) -> Iterator[ObjectRef]:
-        """Discover the IED data model.
+        """Walk the IED data model via MMS GetDirectory services.
 
-        .. note::
-            Not yet implemented (P8.B.3).
+        Traversal order: server -> logical device -> logical node ->
+        data object.  Each data object is yielded as one
+        :class:`~protoskipper.core.driver.ObjectRef`.
+
+        Actual data types and writability are resolved during reads
+        (P8.B.4).  ``data_type`` is ``"do"`` for every yielded ref.
+
+        Errors on individual directory queries are logged at WARNING and
+        skipped; they do not abort the whole enumeration.
+
+        Yields nothing if the session has no active client.
         """
-        raise NotImplementedError(
-            "IEC 61850 data-model discovery is not yet implemented.  "
-            "See P8.B.3 in docs/internal/EXECUTION_PLAN.md."
-        )
-        return
-        yield  # make this a generator
+        if self._client is None:
+            return
+
+        try:
+            ld_names = self._client.get_server_directory()
+        except MmsDirectoryError as exc:
+            _logger.warning("GetServerDirectory failed: %s", exc)
+            return
+
+        for ld_name in ld_names:
+            try:
+                ln_names = self._client.get_logical_device_directory(ld_name)
+            except MmsDirectoryError as exc:
+                _logger.warning("GetLogicalDeviceDirectory(%r) failed: %s", ld_name, exc)
+                continue
+
+            for ln_name in ln_names:
+                ln_ref = f"{ld_name}/{ln_name}"
+                try:
+                    do_names = self._client.get_logical_node_directory(
+                        ln_ref, ACSI_CLASS_DATA_OBJECT
+                    )
+                except MmsDirectoryError as exc:
+                    _logger.warning("GetLogicalNodeDirectory(%r) failed: %s", ln_ref, exc)
+                    continue
+
+                for do_name in do_names:
+                    do_ref = f"{ln_ref}.{do_name}"
+                    yield ObjectRef(
+                        device=self.device,
+                        object_id=do_ref,
+                        data_type="do",
+                        access=Access.READ_ONLY,
+                        label=do_ref,
+                    )
 
     def read(self, ref: ObjectRef) -> ReadResult:
         """Read a single data attribute.

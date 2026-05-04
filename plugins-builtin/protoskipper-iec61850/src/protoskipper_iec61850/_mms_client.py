@@ -10,16 +10,24 @@ for the decision record and build instructions.
 
 This module isolates all SWIG API calls behind the :class:`MmsClient`
 interface.  The rest of the plugin **never** imports pyiec61850 directly —
-it only sees :class:`MmsClient`, :class:`MmsConnectError`, and plain Python
-types.  This makes it straightforward to swap the implementation to a
-pure-Python MMS codec (Option C) without touching any other file.
+it only sees :class:`MmsClient`, :class:`MmsConnectError`,
+:class:`MmsDirectoryError`, and plain Python types.  This makes it
+straightforward to swap the implementation to a pure-Python MMS codec
+(Option C) without touching any other file.
 
 Public API
 ----------
 * :class:`MmsConnectError` — raised by :meth:`MmsClient.connect` when the
   MMS Initiate exchange fails.
+* :class:`MmsDirectoryError` — raised by directory service methods when the
+  IED returns a non-OK error code.
 * :class:`MmsClient` — context-manager-compatible client for one MMS
   connection to a single IED.
+
+Constants
+---------
+* ``ACSI_CLASS_DATA_OBJECT`` … ``ACSI_CLASS_MsCB`` — ACSI class integers
+  passed to :meth:`MmsClient.get_logical_node_directory`.
 
 Thread safety
 -------------
@@ -32,9 +40,24 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from protoskipper.core.errors import ConnectionFailure
+from protoskipper.core.errors import ConnectionFailure, DriverError
 
 _log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ACSI class constants (IEC 61850-7-2 § mapped from libiec61850
+# ied_client_api.h  ACSIClass enum, values 0-9)
+# ---------------------------------------------------------------------------
+ACSI_CLASS_DATA_OBJECT: int = 0
+ACSI_CLASS_DATA_SET: int = 1
+ACSI_CLASS_BRCB: int = 2
+ACSI_CLASS_URCB: int = 3
+ACSI_CLASS_LCB: int = 4
+ACSI_CLASS_LOG: int = 5
+ACSI_CLASS_SGCB: int = 6
+ACSI_CLASS_GoCB: int = 7
+ACSI_CLASS_GsCB: int = 8
+ACSI_CLASS_MsCB: int = 9
 
 # ---------------------------------------------------------------------------
 # IedClientError code → human-readable name
@@ -100,6 +123,51 @@ def _require_pyiec61850() -> Any:
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# LinkedList helper
+# ---------------------------------------------------------------------------
+
+
+def _ll_to_list(lib: Any, ll: Any) -> list[str]:
+    """Convert a pyiec61850 ``LinkedList`` of ``char*`` to ``list[str]``.
+
+    Frees the LinkedList after conversion via ``lib.LinkedList_destroy``.
+    Returns an empty list if *ll* is ``None``.
+    """
+    result: list[str] = []
+    if ll is None:
+        return result
+    node = lib.LinkedList_getNext(ll)
+    while node is not None:
+        data = lib.LinkedList_getData(node)
+        if data is not None:
+            result.append(str(data))
+        node = lib.LinkedList_getNext(node)
+    lib.LinkedList_destroy(ll)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+
+class MmsDirectoryError(DriverError):
+    """Raised when an MMS GetDirectory service call returns a non-OK error.
+
+    Parameters
+    ----------
+    message:
+        Human-readable description including the service name and error name.
+    error_code:
+        Raw ``IedClientError`` integer from libiec61850.
+    """
+
+    def __init__(self, message: str, error_code: int = 0) -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 class MmsConnectError(ConnectionFailure):
@@ -271,3 +339,101 @@ class MmsClient:
     def is_connected(self) -> bool:
         """``True`` if :meth:`connect` has been called and :meth:`close` has not."""
         return self._con is not None
+
+    # ------------------------------------------------------------------
+    # Directory services (P8.B.3)
+    # ------------------------------------------------------------------
+    #
+    # SWIG OUTPUT-typemap pattern: functions whose C signature takes an
+    # ``IedClientError* error`` output parameter return a Python tuple
+    # ``(LinkedList_result, int_error_code)`` because libiec61850's SWIG
+    # file applies ``%apply IedClientError *OUTPUT { IedClientError* error }``.
+    # The LinkedList is then converted to a plain ``list[str]`` by
+    # ``_ll_to_list`` which also frees the list.
+
+    def get_server_directory(self) -> list[str]:
+        """Return logical-device names reported by GetServerDirectory.
+
+        Calls ``IedConnection_getServerDirectory`` with ``getFileNames=False``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        ll, error = lib.IedConnection_getServerDirectory(self._con, False)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetServerDirectory failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return _ll_to_list(lib, ll)
+
+    def get_logical_device_directory(self, ld_name: str) -> list[str]:
+        """Return logical-node names within *ld_name*.
+
+        Calls ``IedConnection_getLogicalDeviceDirectory``.
+        The returned names are bare LN class+instance (e.g. ``"MMXU1"``),
+        not full functional references.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        ll, error = lib.IedConnection_getLogicalDeviceDirectory(self._con, ld_name)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetLogicalDeviceDirectory({ld_name!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return _ll_to_list(lib, ll)
+
+    def get_logical_node_directory(self, ln_ref: str, acsi_class: int) -> list[str]:
+        """Return names of ACSI objects of *acsi_class* within *ln_ref*.
+
+        *ln_ref* is a full functional reference such as ``"LD0/MMXU1"``.
+        *acsi_class* is one of the ``ACSI_CLASS_*`` constants in this module
+        (e.g. :data:`ACSI_CLASS_DATA_OBJECT`).
+
+        Calls ``IedConnection_getLogicalNodeDirectory``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        ll, error = lib.IedConnection_getLogicalNodeDirectory(self._con, ln_ref, acsi_class)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetLogicalNodeDirectory({ln_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return _ll_to_list(lib, ll)
+
+    def get_data_directory_fc(self, da_ref: str) -> list[str]:
+        """Return sub-attribute names (with ``[FC]`` suffix) of a DO or DA.
+
+        *da_ref* is a functional reference such as ``"LD0/MMXU1.A"``.
+        Returned strings look like ``"phsA[MX]"`` or ``"stVal[ST]"``.
+        A non-empty result means the item is a structured DA; an empty
+        result means it is a leaf attribute.
+
+        Calls ``IedConnection_getDataDirectoryFC``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        ll, error = lib.IedConnection_getDataDirectoryFC(self._con, da_ref)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetDataDirectoryFC({da_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return _ll_to_list(lib, ll)

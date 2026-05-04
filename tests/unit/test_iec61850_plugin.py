@@ -1,5 +1,5 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
-"""Unit tests for the IEC 61850 plugin — P8.A.1 / P8.B.2 contract verification.
+"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 contract verification.
 
 Tests verify that:
 * The plugin package imports cleanly.
@@ -14,7 +14,12 @@ Tests verify that:
   - returns a live :class:`Iec61850MmsSession` on success.
 * :class:`Iec61850MmsSession` exposes ``negotiated_pdu_size`` and
   ``peer_implementation``; ``close()`` delegates to ``MmsClient.close()``.
-* Session stubs for P8.B.3-P8.B.5 raise ``NotImplementedError``.
+* ``enumerate_objects`` (P8.B.3):
+  - yields nothing when the session has no active client.
+  - walks LD -> LN -> DO via MmsClient directory methods.
+  - skips branches where a directory call raises ``MmsDirectoryError``.
+  - emits ``ObjectRef`` with ``object_id = "LD/LN.DO"`` and ``data_type = "do"``.
+* Session stubs for P8.B.4-P8.B.5 still raise ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -257,9 +262,9 @@ class TestSessionStubs:
         )
         return Iec61850MmsSession(device=device, safety=safety)  # no client
 
-    def test_enumerate_objects_raises(self, session) -> None:  # type: ignore[no-untyped-def]
-        with pytest.raises(NotImplementedError, match=r"P8\.B\.3"):
-            next(iter(session.enumerate_objects()))
+    def test_enumerate_objects_yields_nothing_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
+        """No client -> enumerate_objects is a no-op generator."""
+        assert list(session.enumerate_objects()) == []
 
     def test_read_raises(self, session) -> None:  # type: ignore[no-untyped-def]
         from protoskipper.core.driver import ObjectRef
@@ -347,3 +352,136 @@ class TestSessionStubs:
 
     def test_peer_implementation_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
         assert session.peer_implementation == ""
+
+
+# ---------------------------------------------------------------------------
+# P8.B.3 - enumerate_objects
+# ---------------------------------------------------------------------------
+
+
+class TestEnumerateObjects:
+    """enumerate_objects() walks LD->LN->DO via MmsClient directory methods."""
+
+    @pytest.fixture
+    def session_with_client(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext, SessionProfile
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = SafetyContext(
+            profile=SessionProfile.LAB,
+            confirm_callback=lambda i, p: True,
+            audit_callback=lambda **_kw: None,
+        )
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    def test_yields_do_refs_for_full_tree(self, session_with_client) -> None:
+        """Happy path: LD0 has LLN0+MMXU1; each has one DO."""
+        from protoskipper.core.driver import ObjectRef
+
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD0"]
+        client.get_logical_device_directory.return_value = ["LLN0", "MMXU1"]
+        client.get_logical_node_directory.side_effect = [
+            ["Mod"],  # LLN0 DOs
+            ["A"],  # MMXU1 DOs
+        ]
+
+        refs = list(session_with_client.enumerate_objects())
+
+        assert len(refs) == 2
+        assert all(isinstance(r, ObjectRef) for r in refs)
+        assert refs[0].object_id == "LD0/LLN0.Mod"
+        assert refs[1].object_id == "LD0/MMXU1.A"
+
+    def test_object_ref_fields(self, session_with_client) -> None:
+        """Yielded ObjectRef has data_type='do', access=READ_ONLY, label=object_id."""
+        from protoskipper.core.driver import Access
+
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD0"]
+        client.get_logical_device_directory.return_value = ["MMXU1"]
+        client.get_logical_node_directory.return_value = ["Mod"]
+
+        (ref,) = list(session_with_client.enumerate_objects())
+
+        assert ref.data_type == "do"
+        assert ref.access == Access.READ_ONLY
+        assert ref.label == "LD0/MMXU1.Mod"
+        assert ref.device is session_with_client.device
+
+    def test_multiple_logical_devices(self, session_with_client) -> None:
+        """Objects from multiple LDs are all yielded."""
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD0", "CTRL"]
+        client.get_logical_device_directory.side_effect = [["LLN0"], ["LLN0"]]
+        client.get_logical_node_directory.side_effect = [["Mod"], ["Mod"]]
+
+        refs = list(session_with_client.enumerate_objects())
+
+        ids = [r.object_id for r in refs]
+        assert "LD0/LLN0.Mod" in ids
+        assert "CTRL/LLN0.Mod" in ids
+
+    def test_skips_ld_on_directory_error(self, session_with_client) -> None:
+        """MmsDirectoryError from get_logical_device_directory skips that LD."""
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD_BAD", "LD_OK"]
+        client.get_logical_device_directory.side_effect = [
+            MmsDirectoryError("timeout", error_code=14),
+            ["LLN0"],
+        ]
+        client.get_logical_node_directory.return_value = ["Mod"]
+
+        refs = list(session_with_client.enumerate_objects())  # must not raise
+
+        assert len(refs) == 1
+        assert refs[0].object_id == "LD_OK/LLN0.Mod"
+
+    def test_skips_ln_on_directory_error(self, session_with_client) -> None:
+        """MmsDirectoryError from get_logical_node_directory skips that LN."""
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD0"]
+        client.get_logical_device_directory.return_value = ["LLN0", "MMXU1"]
+        client.get_logical_node_directory.side_effect = [
+            MmsDirectoryError("access denied", error_code=11),
+            ["A"],
+        ]
+
+        refs = list(session_with_client.enumerate_objects())  # must not raise
+
+        assert len(refs) == 1
+        assert refs[0].object_id == "LD0/MMXU1.A"
+
+    def test_returns_empty_on_server_directory_error(self, session_with_client) -> None:
+        """MmsDirectoryError from get_server_directory -> empty iterator."""
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = session_with_client._client
+        client.get_server_directory.side_effect = MmsDirectoryError("not connected", error_code=1)
+
+        refs = list(session_with_client.enumerate_objects())  # must not raise
+
+        assert refs == []
+
+    def test_ln_ref_format(self, session_with_client) -> None:
+        """LN functional reference passed to get_logical_node_directory is 'LD/LN'."""
+        client = session_with_client._client
+        client.get_server_directory.return_value = ["LD0"]
+        client.get_logical_device_directory.return_value = ["MMXU1"]
+        client.get_logical_node_directory.return_value = ["A"]
+
+        list(session_with_client.enumerate_objects())
+
+        client.get_logical_node_directory.assert_called_once_with(
+            "LD0/MMXU1",
+            0,  # ACSI_CLASS_DATA_OBJECT = 0
+        )
