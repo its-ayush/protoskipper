@@ -1,0 +1,68 @@
+# Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
+# ProtoSkipper — IEC 61850 built-in plugin
+# ---------------------------------------------------------------------------
+# Install:  pip install -e "plugins-builtin/protoskipper-iec61850/[dev]"
+# ---------------------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=72", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protoskipper-iec61850"
+version = "0.1.0"
+description = "IEC 61850 (MMS / GOOSE / SV) plugin for ProtoSkipper"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+authors = [{ name = "DataSailors Pvt Ltd" }]
+
+# Optional deps — guarded inside driver code so the plugin loads even when
+# the heavy libraries are absent (users get a clear error only on first use).
+dependencies = [
+    "protoskipper>=0.1.0",  # core contract
+]
+
+[project.optional-dependencies]
+mms = [
+    # python-iec61850 (libiec61850 SWIG binding) or pure-Python alternative.
+    # See docs/internal/IEC61850_MMS_LIBRARY.md for the decision record.
+    # Intentionally left open until P8.B.1 is resolved.
+]
+goose = [
+    # raw-socket access — scapy or a custom AF_PACKET / BPF wrapper.
+]
+scl = [
+    "lxml>=5.0",
+]
+all = [
+    "protoskipper-iec61850[mms,goose,scl]",
+]
+dev = [
+    "protoskipper-iec61850[all]",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+# ---------------------------------------------------------------------------
+# Entry points — register with the ProtoSkipper plugin contract
+# ---------------------------------------------------------------------------
+[project.entry-points."protoskipper.protocols"]
+"iec61850.mms" = "protoskipper_iec61850.driver:Iec61850MmsDriver"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+protoskipper_iec61850 = ["py.typed", "scl/schemas/*.xsd"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
