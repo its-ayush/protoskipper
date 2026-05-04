@@ -1254,50 +1254,41 @@ class TestSessionLog:
 
 
 class TestMmsClientListFiles:
-    """MmsClient.list_files() wraps IedConnection_getFileDirectory."""
+    """MmsClient.list_files() delegates to the IedGetFileDirStr C shim."""
 
     def _make_client(self):  # type: ignore[no-untyped-def]
         client = _make_mock_client_with_internals()
         lib = client._lib
-        dir_ll = object()  # opaque sentinel for the LinkedList
-        lib.IedConnection_getFileDirectory.return_value = (dir_ll, 0)
-        # No entries by default
-        lib.LinkedList_getNext.return_value = None
-        return client, lib, dir_ll
+        # New shim returns (tab-delimited-string, error_code) tuple
+        lib.IedGetFileDirStr.return_value = ("", 0)
+        return client, lib
 
     def test_returns_empty_list_for_empty_directory(self) -> None:
-        client, _lib, _ = self._make_client()
+        client, _lib = self._make_client()
         result = client.list_files()
         assert result == []
 
     def test_returns_file_info_list_on_success(self) -> None:
-        from unittest.mock import MagicMock
-
         from protoskipper_iec61850._mms_client import FileInfo
 
-        client, lib, _dir_ll = self._make_client()
-        node1 = MagicMock()
-        entry1 = MagicMock()
-        lib.LinkedList_getNext.side_effect = [node1, None]
-        lib.LinkedList_getData.return_value = entry1
-        lib.FileDirectoryEntry_getFileName.return_value = "fault01.cfg"
-        lib.FileDirectoryEntry_getFileSize.return_value = 1024
-        lib.FileDirectoryEntry_getLastModified.return_value = 1_700_000_000_000
+        client, lib = self._make_client()
+        lib.IedGetFileDirStr.return_value = ("fault01.cfg\t1024\t1700000000000\n", 0)
 
         result = client.list_files("COMTRADE")
         expected_info = FileInfo(name="fault01.cfg", size=1024, last_modified_ms=1_700_000_000_000)
         assert result == [expected_info]
 
-    def test_ll_destroyed_on_success(self) -> None:
-        client, lib, dir_ll = self._make_client()
-        client.list_files()
-        lib.LinkedList_destroyDeep.assert_called_once_with(dir_ll, lib.FileDirectoryEntry_destroy)
+    def test_shim_called_with_correct_args(self) -> None:
+        """IedGetFileDirStr is called with the connection handle and dir string."""
+        client, lib = self._make_client()
+        client.list_files("COMTRADE")
+        lib.IedGetFileDirStr.assert_called_once_with(client._con, "COMTRADE")
 
     def test_raises_mms_directory_error_on_ied_error(self) -> None:
         from protoskipper_iec61850._mms_client import MmsDirectoryError
 
-        client, lib, dir_ll = self._make_client()
-        lib.IedConnection_getFileDirectory.return_value = (dir_ll, 22)  # OBJECT_DOES_NOT_EXIST
+        client, lib = self._make_client()
+        lib.IedGetFileDirStr.return_value = ("", 22)  # OBJECT_DOES_NOT_EXIST
         with pytest.raises(MmsDirectoryError):
             client.list_files("MISSING")
 

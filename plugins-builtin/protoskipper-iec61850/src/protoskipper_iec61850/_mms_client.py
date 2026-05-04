@@ -591,6 +591,8 @@ def _require_pyiec61850() -> Any:
 def _ll_to_list(lib: Any, ll: Any) -> list[str]:
     """Convert a pyiec61850 ``LinkedList`` of ``char*`` to ``list[str]``.
 
+    ``LinkedList_getData`` returns SWIG ``void*`` objects; ``lib.toCharP``
+    casts them to Python ``str`` (they are C ``char*`` in practice).
     Frees the LinkedList after conversion via ``lib.LinkedList_destroy``.
     Returns an empty list if *ll* is ``None``.
     """
@@ -601,7 +603,10 @@ def _ll_to_list(lib: Any, ll: Any) -> list[str]:
     while node is not None:
         data = lib.LinkedList_getData(node)
         if data is not None:
-            result.append(str(data))
+            raw = lib.toCharP(data)
+            result.append(
+                raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
+            )
         node = lib.LinkedList_getNext(node)
     lib.LinkedList_destroy(ll)
     return result
@@ -1591,24 +1596,29 @@ class MmsClient:
         """
         lib = self._lib
         dir_arg: str = directory or ""
-        ll, error = lib.IedConnection_getFileDirectory(self._con, dir_arg)
+        # IedGetFileDirStr does all C work (IedConnection_getFileDirectory +
+        # FileDirectoryEntry processing + cleanup) inside a single C function.
+        # Python only sees a TAB-delimited string result and an int error code.
+        raw, error = lib.IedGetFileDirStr(self._con, dir_arg)
         if error != lib.IED_ERROR_OK:
             raise MmsDirectoryError(
                 f"GetFileDirectory({dir_arg!r}) failed: {_ied_error_name(error)}",
                 error_code=error,
             )
+        text: str = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else (raw or "")
         result: list[FileInfo] = []
-        try:
-            node = lib.LinkedList_getNext(ll)
-            while node is not None:
-                entry = lib.LinkedList_getData(node)
-                name: str = lib.FileDirectoryEntry_getFileName(entry) or ""
-                size: int = int(lib.FileDirectoryEntry_getFileSize(entry))
-                last_mod: int = int(lib.FileDirectoryEntry_getLastModified(entry))
-                result.append(FileInfo(name=name, size=size, last_modified_ms=last_mod))
-                node = lib.LinkedList_getNext(node)
-        finally:
-            lib.LinkedList_destroyDeep(ll, lib.FileDirectoryEntry_destroy)
+        for line in text.splitlines():
+            if not line:
+                continue
+            parts = line.split("\t", 2)
+            if len(parts) == 3:
+                result.append(
+                    FileInfo(
+                        name=parts[0],
+                        size=int(parts[1]) if parts[1].isdigit() else 0,
+                        last_modified_ms=int(parts[2]) if parts[2].isdigit() else 0,
+                    )
+                )
         return result
 
     def get_file(self, remote_path: str) -> bytes:
@@ -1689,13 +1699,14 @@ class MmsClient:
             If the IED returns a non-OK ``IedClientError``.
         """
         lib = self._lib
-        ll, error = lib.IedConnection_getServerDirectory(self._con, False)
+        raw, error = lib.IedGetServerDirStr(self._con)
         if error != lib.IED_ERROR_OK:
             raise MmsDirectoryError(
                 f"GetServerDirectory failed: {_ied_error_name(error)}",
                 error_code=error,
             )
-        return _ll_to_list(lib, ll)
+        text: str = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else (raw or "")
+        return [name for name in text.splitlines() if name]
 
     def get_logical_device_directory(self, ld_name: str) -> list[str]:
         """Return logical-node names within *ld_name*.
