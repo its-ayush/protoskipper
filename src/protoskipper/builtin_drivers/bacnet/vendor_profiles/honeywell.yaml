@@ -1,0 +1,30 @@
+id: honeywell_webbased
+display_name: "Honeywell WEBs / Excel SMART / Niagara AX"
+vendor_id: 11
+quirks:
+  - no-segmentation
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 16
+cov_lifetime_s: 600
+segmentation_supported: false
+proprietary_object_types:
+  - type_id: 128
+    name: "HON-Custom-Object"
+    description: "Honeywell proprietary custom object"
+proprietary_properties:
+  - property_id: 2501
+    name: "HON-Schedule-Reference"
+    object_types: ["schedule"]
+    data_type: "characterstring"
+    description: "Honeywell schedule reference string"
+  - property_id: 2502
+    name: "HON-Trend-Sample-Rate"
+    object_types: ["trend-log"]
+    data_type: "unsigned"
+    description: "Honeywell trend log sample rate extension"
+notes: |
+  Honeywell WEBs-AX and Excel SMART controllers use vendor_id 11.
+  Older Niagara AX-based Honeywell devices typically do NOT support
+  BACnet segmentation — avoid large RPM requests.
+  WEBs-N4 (Niagara 4) devices do support segmentation.
+  COV subscriptions are supported but have a maximum lifetime of 600s.

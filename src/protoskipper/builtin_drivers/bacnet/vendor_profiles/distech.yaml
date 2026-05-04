@@ -1,0 +1,20 @@
+id: distech_ecb
+display_name: "Distech Controls ECB / ECLYPSE"
+vendor_id: 265
+quirks: []
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 20
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types: []
+proprietary_properties:
+  - property_id: 8501
+    name: "DCL-Object-Category"
+    object_types: ["analog-input", "analog-output", "analog-value", "binary-input", "binary-output"]
+    data_type: "unsigned"
+    description: "Distech object category tag"
+notes: |
+  Distech Controls (vendor_id 265) produces ECB and ECLYPSE controllers.
+  ECLYPSE Connected Controllers support BACnet/IP natively and follow the
+  standard closely.  RPM batch size can be 20+ without issues.
+  Distech devices are Niagara-based and support COV subscriptions.

@@ -1,0 +1,24 @@
+id: abb_eclipse
+display_name: "ABB Eclipse / Cylon / Niagara-based"
+vendor_id: 90
+quirks:
+  - slow-rpm
+default_apdu_timeout_ms: 8000
+rpm_batch_size: 10
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 132
+    name: "ABB-Controller-Object"
+    description: "ABB Eclipse proprietary controller object"
+proprietary_properties:
+  - property_id: 6001
+    name: "ABB-Controller-Status"
+    object_types: ["device"]
+    data_type: "enumerated"
+    description: "ABB proprietary controller status"
+notes: |
+  ABB Eclipse (formerly Cylon) uses vendor_id 90.
+  Cylon-branded BACnet devices use vendor_id 12.
+  ABB Ability Building Management uses vendor_id 90 on newer hardware.
+  RPM performance varies; batch size of 10 is safe.

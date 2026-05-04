@@ -1,0 +1,32 @@
+id: jci_metasys
+display_name: "Johnson Controls Metasys NAE/NCE/SNC"
+vendor_id: 5
+quirks:
+  - slow-rpm
+default_apdu_timeout_ms: 8000
+rpm_batch_size: 12
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 140
+    name: "JCI-Program"
+    description: "Johnson Controls proprietary program object"
+  - type_id: 141
+    name: "JCI-Group"
+    description: "Johnson Controls proprietary group object"
+proprietary_properties:
+  - property_id: 4001
+    name: "JCI-Attribute"
+    object_types: ["device", "analog-input", "analog-output", "analog-value"]
+    data_type: "real"
+    description: "JCI Metasys proprietary attribute"
+  - property_id: 4002
+    name: "JCI-Priority-Array-Override"
+    object_types: ["analog-output", "analog-value", "binary-output", "binary-value"]
+    data_type: "any"
+    description: "JCI extended priority array override"
+notes: |
+  JCI Metasys NAE/NCE/SNC devices use vendor_id 5.
+  RPM can be slow on large point sets; reduce batch size.
+  NAE55/NAE85 support segmentation; older NCE models may not.
+  Metasys 11.0+ firmware improves RPM performance significantly.
