@@ -54,6 +54,34 @@ daemon. The most relevant security boundaries are:
 - Issues requiring an attacker to already have write access to the machine
   running ProtoSkipper.
 - Social-engineering attacks on operators.
+- "Cleartext OT protocols are cleartext" — this is inherent to the protocols
+  (Modbus TCP, IEC 104, BACnet/IP, IEC 61850 MMS) and not a ProtoSkipper bug.
+
+---
+
+## Security guarantees
+
+### Audit log integrity
+Every write attempt is recorded **before** the write is committed to the wire.
+The log is HMAC-SHA256 chained; any deletion, gap, or row modification is
+detectable by `verify_log()`.  See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
+§5 for the full chain specification.
+
+### Write confirmation (PRODUCTION sessions)
+On `PRODUCTION` sessions every write requires explicit operator confirmation
+through a `SafetyConfirmDialog`.  The worker thread blocks on a
+`threading.Event`; a 300-second timeout defaults to **deny**.  Denied attempts
+are recorded in the audit log.
+
+### No inbound network listeners
+ProtoSkipper opens no listening sockets.  All network connections are outbound,
+operator-initiated.
+
+### Plugin isolation limitation
+ProtoSkipper does **not** sandbox plugins.  Installing a plugin is equivalent
+to running arbitrary Python code with the operator's OS privileges.  Install
+plugins only from trusted sources.  See
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) §4.4 and §6.
 
 ---
 

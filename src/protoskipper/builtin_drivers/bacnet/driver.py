@@ -28,6 +28,7 @@ points-list CSV but are normalised to the long form before storage.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from collections.abc import Iterator
@@ -175,7 +176,20 @@ class BacnetIpDriver(ProtocolDriver):
                 clean_specs.append(spec)
 
         if clean_specs and clean_specs[0] not in {"broadcast", "255.255.255.255"}:
-            target_address = clean_specs[0]
+            addr_spec = clean_specs[0]
+            # If the caller supplied CIDR notation (e.g. 10.10.14.0/23), convert it
+            # to the subnet's directed broadcast address.  BACnet routers and
+            # Tailscale subnet routes forward directed broadcasts; global broadcast
+            # (255.255.255.255) does not traverse routed boundaries.
+            if "/" in addr_spec:
+                try:
+                    net = ipaddress.ip_network(addr_spec, strict=False)
+                    target_address = str(net.broadcast_address)
+                    _logger.debug("CIDR %r -> directed broadcast %s", addr_spec, target_address)
+                except ValueError:
+                    target_address = addr_spec  # let bacpypes3 handle or error
+            else:
+                target_address = addr_spec
 
         # Build a temporary event loop and application for discovery
         loop = asyncio.new_event_loop()

@@ -75,6 +75,7 @@ dev = [
     "mypy==1.11.2",
     "build==1.4.0",
     "pre-commit==4.6.0",
+    "hypothesis>=6.100",
 ]
 dev-gui = [
     # Adds Qt GUI test support on top of [dev].

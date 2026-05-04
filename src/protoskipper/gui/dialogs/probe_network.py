@@ -55,8 +55,18 @@ _TARGET_HINTS = {
         "Examples: /dev/ttyUSB0  |  /dev/ttyUSB0@9600,N,1/units=1-32  |  COM4@19200,E,1/unit=3"
     ),
     "bacnet.ip": (
-        "Examples: broadcast  |  192.168.1.255  |  10.0.0.5  |  "
-        "low=1,high=1000  |  broadcast,low=1,high=4194302"
+        "Examples: broadcast  |  192.168.1.255  |  10.10.14.0/23  |  "
+        "10.0.0.5  |  low=1,high=1000  |  broadcast,low=1,high=4194302  "
+        "(CIDR is expanded to the subnet directed broadcast)"
+    ),
+    "iec104.tcp": (
+        "Examples: 10.0.0.5  |  10.0.0.5:2404  |  "
+        "192.168.1.0/24  |  192.168.1.0/24:2404  |  host1,host2,10.0.0.0/24"
+    ),
+    "iec61850.mms": (
+        "Examples: 10.0.0.5  |  10.0.0.5:102  |  "
+        "192.168.1.0/24  |  192.168.1.0/24:4096  |  host1,10.0.0.0/24  "
+        "(scans TCP/102 — no MMS handshake, safe on live networks)"
     ),
 }
 

@@ -19,10 +19,12 @@ still allows manual entry).
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import socket
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
@@ -58,6 +60,64 @@ from protoskipper.core.errors import (
 _logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 2404
+_PROBE_WORKERS: int = 64
+_PROBE_TIMEOUT_S: float = 1.5
+
+
+def _expand_iec104_target(target: str) -> list[tuple[str, int]]:
+    """Parse a probe target into a list of (host, port) pairs.
+
+    Accepts single hosts, CIDR ranges, and comma-separated combinations::
+
+        10.0.0.5
+        10.0.0.5:2404
+        192.168.1.0/24
+        192.168.1.0/24:2404
+        host1,host2,10.0.0.0/24
+    """
+    hosts: list[tuple[str, int]] = []
+    for spec in target.split(","):
+        spec = spec.strip()
+        if not spec:
+            continue
+        port = DEFAULT_PORT
+        if "/" in spec and not spec.startswith("/"):
+            # CIDR, optionally with :port after the prefix length
+            cidr_port_m = re.match(r"^(\S+/\d+):(\d+)$", spec)
+            if cidr_port_m:
+                spec, port_str = cidr_port_m.group(1), cidr_port_m.group(2)
+                port = int(port_str)
+            try:
+                net = ipaddress.ip_network(spec, strict=False)
+            except ValueError:
+                _logger.debug("skipping unparseable CIDR %r", spec)
+                continue
+            for ip in net.hosts() if net.num_addresses > 1 else [net.network_address]:
+                hosts.append((str(ip), port))
+        else:
+            # host or host:port (strip off /ca= and /oa= for probing purposes)
+            bare = spec.split("/")[0]
+            host_port_m = re.match(r"^([^:]+):(\d+)$", bare)
+            if host_port_m:
+                hosts.append((host_port_m.group(1), int(host_port_m.group(2))))
+            else:
+                hosts.append((bare, port))
+    return hosts
+
+
+def _probe_104_port(host: str, port: int) -> DeviceRef | None:
+    """TCP-connect to host:port; return :class:`DeviceRef` on success."""
+    try:
+        with socket.create_connection((host, port), timeout=_PROBE_TIMEOUT_S):
+            pass
+        return DeviceRef(
+            protocol=Iec104TcpDriver.PROTOCOL_ID,
+            address=f"{host}:{port}/ca=1",
+            label=f"IEC104 @ {host}:{port}",
+            metadata={"ca": 1, "port": port},
+        )
+    except OSError:
+        return None
 
 
 _ADDR_RE = re.compile(
@@ -156,31 +216,30 @@ class Iec104TcpDriver(ProtocolDriver):
     # ------------------------------------------------------------------
 
     def discover(self, target: str) -> Iterator[DeviceRef]:
-        """Probe ``target`` (host or comma list) for IEC 104 listeners.
+        """Probe *target* for IEC 104 listeners.
 
-        We only verify that the TCP port is open — sending STARTDT against
-        a real RTU has side effects (it may close other sessions on
+        Accepts single hosts, CIDR ranges, and comma-separated combinations::
+
+            10.0.0.5
+            10.0.0.5:2404
+            192.168.1.0/24
+            192.168.1.0/24:2404
+            host1,host2,10.0.0.0/24
+
+        Only a TCP-connect is attempted — sending STARTDT against a real RTU
+        has side effects (it may forcibly close the existing master session on
         single-master devices), so probing is intentionally non-intrusive.
-        Operators wanting a deeper handshake can invoke ``connect`` and
-        observe the result in the session log.
         """
-        host_specs = [s.strip() for s in target.split(",") if s.strip()]
-        for spec in host_specs:
-            try:
-                host, port, ca, _ = parse_address(spec)
-            except EncodingError:
-                _logger.debug("skipping unparseable target %r", spec)
-                continue
-            try:
-                with socket.create_connection((host, port), timeout=1.0):
-                    yield DeviceRef(
-                        protocol=self.PROTOCOL_ID,
-                        address=f"{host}:{port}/ca={ca}",
-                        label=f"IEC104 @ {host}:{port}",
-                        metadata={"ca": ca, "port": port},
-                    )
-            except OSError as exc:
-                _logger.debug("IEC104 probe %s:%d closed/unreachable: %s", host, port, exc)
+        hosts = _expand_iec104_target(target)
+        if not hosts:
+            return
+        max_w = min(_PROBE_WORKERS, max(1, len(hosts)))
+        with ThreadPoolExecutor(max_workers=max_w) as ex:
+            futs = {ex.submit(_probe_104_port, h, p): (h, p) for h, p in hosts}
+            for fut in as_completed(futs):
+                ref = fut.result()
+                if ref is not None:
+                    yield ref
 
     def parse_address(self, address: str) -> DeviceRef:
         parse_address(address)  # validates

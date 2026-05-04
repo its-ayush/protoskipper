@@ -31,9 +31,12 @@ P8.B.x sub-task that implements it.  The goal is:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import socket
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
@@ -78,6 +81,68 @@ __all__ = ["Iec61850MmsDriver", "Iec61850MmsSession"]
 # ---------------------------------------------------------------------------
 
 DEFAULT_MMS_PORT: int = 102
+_PROBE_WORKERS: int = 64
+_PROBE_TIMEOUT_S: float = 1.5
+
+
+def _expand_mms_target(target: str) -> list[tuple[str, int]]:
+    """Parse a probe target into a list of (host, port) pairs.
+
+    Accepts::
+
+        10.0.0.5
+        10.0.0.5:102
+        192.168.1.0/24
+        192.168.1.0/24:4096
+        host1,host2:102,10.0.0.0/24
+    """
+    hosts: list[tuple[str, int]] = []
+    for spec in target.split(","):
+        spec = spec.strip()
+        if not spec:
+            continue
+        port = DEFAULT_MMS_PORT
+        # Detect CIDR (contains / not followed by digits only — must contain a dot too)
+        if "/" in spec and not spec.startswith("/"):
+            # May be CIDR like 10.0.0.0/24 optionally with :port suffix before the CIDR slash
+            # Separate a trailing :port that appears *after* the CIDR notation
+            # e.g. "10.0.0.0/24:4096" is ambiguous; treat trailing :port as port only if it
+            # comes after the prefix-length digit group.
+            cidr_port_m = re.match(r"^(\S+/\d+):(\d+)$", spec)
+            if cidr_port_m:
+                spec, port_str = cidr_port_m.group(1), cidr_port_m.group(2)
+                port = int(port_str)
+            try:
+                net = ipaddress.ip_network(spec, strict=False)
+            except ValueError:
+                _logger.debug("skipping unparseable CIDR %r", spec)
+                continue
+            for ip in net.hosts() if net.num_addresses > 1 else [net.network_address]:
+                hosts.append((str(ip), port))
+        else:
+            # host or host:port
+            host_port_m = re.match(r"^([^:]+):(\d+)$", spec)
+            if host_port_m:
+                hosts.append((host_port_m.group(1), int(host_port_m.group(2))))
+            else:
+                hosts.append((spec, port))
+    return hosts
+
+
+def _probe_mms_port(host: str, port: int) -> DeviceRef | None:
+    """TCP-connect to host:port; return a :class:`DeviceRef` on success."""
+    try:
+        with socket.create_connection((host, port), timeout=_PROBE_TIMEOUT_S):
+            pass
+        return DeviceRef(
+            protocol="iec61850.mms",
+            address=f"{host}:{port}",
+            label=f"IEC 61850 IED @ {host}:{port}",
+            metadata={"port": port},
+        )
+    except OSError:
+        return None
+
 
 _ADDRESS_RE = re.compile(
     r"^(?P<host>[^:?]+)"
@@ -186,13 +251,28 @@ class Iec61850MmsDriver(ProtocolDriver):
         )
 
     def discover(self, target: str) -> Iterator[DeviceRef]:
-        """Probe ``target`` for IEC 61850 IEDs.
+        """Probe *target* for IEC 61850 IEDs by scanning TCP port 102.
 
-        .. note::
-            Not yet implemented (P8.B.2).  Yields nothing silently.
+        *target* accepts:
+
+        * ``host`` or ``host:port`` — single address.
+        * ``192.168.1.0/24`` or ``192.168.1.0/24:4096`` — CIDR subnet.
+        * Comma-separated combination of the above.
+
+        Discovery is a TCP-connect probe only (no MMS Initiate handshake).
+        It is fast and non-intrusive but cannot distinguish a real IED from
+        any other service that happens to accept connections on port 102.
         """
-        return
-        yield  # make this a generator even before P8.B.2 lands
+        hosts = _expand_mms_target(target)
+        if not hosts:
+            return
+        max_w = min(_PROBE_WORKERS, max(1, len(hosts)))
+        with ThreadPoolExecutor(max_workers=max_w) as ex:
+            futs = {ex.submit(_probe_mms_port, h, p): (h, p) for h, p in hosts}
+            for fut in as_completed(futs):
+                ref = fut.result()
+                if ref is not None:
+                    yield ref
 
     def connect(
         self,
