@@ -9,7 +9,12 @@ A pcapng file written by this module contains exactly three block types:
    byte-order magic, version, and a ProtoSkipper application comment.
 2. **Interface Description Block** (type ``0x00000001``) — one per file, with
    link type ``147`` (``LINKTYPE_USER0``), reserved for user-defined protocols.
-3. **Custom Block** (type ``0x00000BAD``, copyable) — one per captured frame.
+3. **ProtoSkipper Protocol Block** (type ``0x40000001``) — one per captured
+   frame.  Bit 30 is set per RFC 9443 §3.1 to indicate that the block
+   **must not be copied** when an application filters or modifies the file
+   (protocol-specific metadata is meaningless without the ProtoSkipper
+   dissector).  This is a ProtoSkipper-private block type; unknown to
+   standard pcapng tools, which skip it silently.
 
 Custom Block body layout
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -56,7 +61,11 @@ from protoskipper.core.capture import CapturedFrame
 # ---------------------------------------------------------------------------
 _BT_SHB: int = 0x0A0D0D0A  # Section Header Block
 _BT_IDB: int = 0x00000001  # Interface Description Block
-_BT_CUSTOM: int = 0x00000BAD  # Custom Block (copyable)
+# ProtoSkipper Protocol Block type: bit 30 set (do not copy when filtering)
+# per RFC 9443 §3.1.  Value 0x40000001 is ProtoSkipper-private; standard
+# pcapng tools skip unknown block types silently, satisfying the "Wireshark
+# readable when given our dissector" goal.
+_BT_CUSTOM: int = 0x40000001  # ProtoSkipper Protocol Block (do not copy)
 
 _BYTE_ORDER_MAGIC: int = 0x1A2B3C4D  # LE sentinel in SHB
 _VERSION_MAJOR: int = 1

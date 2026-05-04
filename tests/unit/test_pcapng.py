@@ -208,3 +208,49 @@ def test_write_overwrites_existing_file(tmp_path: Path) -> None:
     write_pcapng([_frame("rx", b"second"), _frame("tx", b"third")], out)
     result = read_pcapng(out)
     assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# P2.A.1 Acceptance criteria tests (explicit value assertions)
+# ---------------------------------------------------------------------------
+
+
+def test_custom_block_type_is_0x40000001(tmp_path: Path) -> None:
+    """P2.A.1 AC: Custom Block type must be exactly 0x40000001.
+
+    We hardcode the expected value so a constant rename cannot silently
+    invalidate the requirement.
+    """
+    out = tmp_path / "cap.pcapng"
+    write_pcapng([_frame("tx", b"payload")], out)
+    data = out.read_bytes()
+    pos = 0
+    found = False
+    while pos < len(data) - 8:
+        block_type, block_len = struct.unpack_from("<II", data, pos)
+        if block_type == 0x40000001:
+            found = True
+            break
+        if block_len == 0:
+            break
+        pos += block_len
+    assert found, "No block with type 0x40000001 found — P2.A.1 AC not met"
+
+
+def test_custom_block_carries_protocol_id(tmp_path: Path) -> None:
+    """P2.A.1 AC: Custom Block body must embed the protocol_id string."""
+    protocol_id = "modbus.tcp"
+    out = tmp_path / "cap.pcapng"
+    write_pcapng([_frame("tx", b"\xff")], out, protocol_id=protocol_id)
+    raw = out.read_bytes()
+    # protocol_id is stored as UTF-8 inside the custom block body
+    assert protocol_id.encode() in raw, "protocol_id not found in raw file bytes"
+
+
+def test_custom_block_carries_payload(tmp_path: Path) -> None:
+    """P2.A.1 AC: Custom Block body must embed the raw frame payload."""
+    payload = b"\xde\xad\xbe\xef\xca\xfe"
+    out = tmp_path / "cap.pcapng"
+    write_pcapng([_frame("rx", payload)], out)
+    raw = out.read_bytes()
+    assert payload in raw, "raw payload not found in pcapng file bytes"
