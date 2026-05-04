@@ -1196,7 +1196,11 @@ mirror P7.B.7.
 > **Complete (scaffold).** `sc.py` — `BACnetSCSession` validates `wss://` URI, TLS cert paths;
 > all methods raise `NotImplementedError` with upgrade note (requires bacpypes3 >= 0.0.110).
 
-#### P7.C.1 WebSocket client ⬜
+#### P7.C.1 WebSocket client ⬜ *(deferred — hardware & network available)*
+
+> **Planned.** BACnet/SC hub and direct-connection test bench is available
+> for integration work. Requires bumping bacpypes3 ≥ 0.0.110 or adding the
+> `websockets` library. Deferred to a dedicated sprint.
 
 * **Goal:** `wss://` client over Python `websockets` or `aiohttp`,
   TLS 1.2/1.3, hub & direct roles.
@@ -1206,9 +1210,15 @@ mirror P7.B.7.
   * Heartbeat keep-alive at the configured interval.
   * Reconnect with exponential backoff.
 
-#### P7.C.2 BVLC for SC (Annex YY) ⬜
+#### P7.C.2 BVLC for SC (Annex YY) ⬜ *(deferred — hardware & network available)*
 
-#### P7.C.3 Operational PKI (cert provisioning UI) ⬜
+> **Planned.** Full BVLC-SC encoder/decoder per the finalised Annex YY spec.
+> Test bench available; deferred pending spec stabilisation.
+
+#### P7.C.3 Operational PKI (cert provisioning UI) ⬜ *(deferred — hardware & network available)*
+
+> **Planned.** PKI test infrastructure (CA, signed certs) is available.
+> Deferred to a dedicated sprint.
 
 * **Goal:** Generate CSR, import signed operational cert, store key
   in OS keychain, validate against CA bundle.
@@ -1232,7 +1242,10 @@ mirror P7.B.7.
 > constants, `MSTPState` enum, validates MAC (0–127) and baud rate; all methods
 > raise `NotImplementedError`. RS-485 hardware integration is a future task.
 
-#### P7.D.1 Token-passing master state machine
+#### P7.D.1 Token-passing master state machine ⬜ *(deferred — RS-485 hardware available)*
+
+> **Planned.** RS-485 USB adapter and a 2-master test bus are available.
+> Deferred to a dedicated MS/TP sprint.
 
 * **Goal:** Per ASHRAE 135 cl. 9.5, with PFM, IDLE, USE_TOKEN,
   WAIT_FOR_REPLY, DONE_WITH_TOKEN, NO_TOKEN states.
@@ -1251,7 +1264,10 @@ mirror P7.B.7.
 
 ### P7.E — Routing + BBMD + FD
 
-#### P7.E.1 BBMD role 🔶 (BBMD read-only done; active BBMD role ⬜)
+#### P7.E.1 BBMD role 🔶 *(read-only done; active role ⬜ — network available)*
+
+> **Planned.** A BBMD peer and multi-subnet test network are available.
+> Active forwarding role deferred to a dedicated routing sprint.
 
 * **Goal:** Run ourselves as a BBMD: forward broadcasts, maintain
   BDT, accept FD registrations.
