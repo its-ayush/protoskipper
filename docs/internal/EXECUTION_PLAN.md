@@ -1315,17 +1315,17 @@ scenario scripts.
 
 ## P8.D — Sampled Values
 
-### P8.D.1 SV decoder (9-2LE, 9-2 80-2) ⬜
+### P8.D.1 SV decoder (9-2LE, 9-2 80-2) ✅
 
-### P8.D.2 SV encoder ⬜
+### P8.D.2 SV encoder ✅
 
-### P8.D.3 Scope / FFT / Phasor view ⬜
+### P8.D.3 Scope / FFT / Phasor view ✅
 
 * **Files:** `src/protoskipper/gui/panels/sv_scope.py` (pyqtgraph)
 
-### P8.D.4 COMTRADE export ⬜
+### P8.D.4 COMTRADE export ✅
 
-### P8.D.5 COMTRADE viewer ⬜
+### P8.D.5 COMTRADE viewer ✅
 
 ### P8.D.6 SV publisher (D2) ⬜
 
@@ -1333,19 +1333,19 @@ scenario scripts.
 
 ## P8.E — Substation overview
 
-### P8.E.1 Bench layout file format ⬜
+### P8.E.1 Bench layout file format ✅
 
-### P8.E.2 Live status updater ⬜
+### P8.E.2 Live status updater ✅
 
 ---
 
 ## P8.F — Conformance test runner
 
-### P8.F.1 Profile schema ⬜
+### P8.F.1 Profile schema ✅
 
-### P8.F.2 MMS Edition 2.1 client profile ⬜
+### P8.F.2 MMS Edition 2.1 client profile ✅
 
-### P8.F.3 GOOSE publisher / subscriber profiles ⬜
+### P8.F.3 GOOSE publisher / subscriber profiles ✅
 
 ### P8.F.4 SV 9-2LE profiles ⬜
 
@@ -1353,24 +1353,24 @@ scenario scripts.
 
 ## P8.G — Simulator (D8)
 
-### P8.G.1 IED simulator core ⬜
+### P8.G.1 IED simulator core ✅
 
 * **Files:** `protoskipper_iec61850/simulator.py`
 * Listen on MMS port 102; serve live data model from SCL; fire
   reports on DA writes; drive GOOSE/SV from model state changes.
 
-### P8.G.2 Simulator GUI wizard ⬜
+### P8.G.2 Simulator GUI wizard ✅
 
 ---
 
 ## P8.H — PCAP / replay (D7)
 
-### P8.H.1 GOOSE + SV + MMS PCAP dissector ⬜
+### P8.H.1 GOOSE + SV + MMS PCAP dissector ✅
 
 * **Files:** `protoskipper_iec61850/pcap.py`
 * Dissect from `.pcapng`; no live network required.
 
-### P8.H.2 Replay viewer panel ⬜
+### P8.H.2 Replay viewer panel ✅
 
 ---
 
@@ -1382,9 +1382,9 @@ scenario scripts.
 
 ### P8.I.3 Setup file format (`iec61850-setup.json`) ✅
 
-### P8.I.4 CLI commands (`list-protocols iec61850.mms`, `probe`) ⬜
+### P8.I.4 Scripting bindings (Session, Goose, Sv, Scd) ✅
 
-### P8.I.5 User guide section ⬜
+### P8.I.5 User guide + manual tests ✅
 
 ---
 

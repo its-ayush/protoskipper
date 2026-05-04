@@ -1,6 +1,6 @@
 # IEC 61850 — UX, Feature, and Implementation Plan
 
-> **Status:** Design document. Not yet code.
+> **Status:** Implementation complete (P8.A – P8.I). See EXECUTION_PLAN.md for individual task status.
 > **Scope:** ProtoSkipper Phase 8 (per `docs/internal/EXECUTION_PLAN.md`).
 > **Mission:** Build the IEC 61850 client/test/commissioning toolkit that
 > substation engineers actually want to keep on their laptop —
@@ -1052,7 +1052,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.D — Sampled Values
+### P8.D — Sampled Values ✅
 
 #### P8.D.1 SV decoder (9-2LE, 9-2 80-2)
 
@@ -1078,7 +1078,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.E — Substation overview (D3)
+### P8.E — Substation overview (D3) ✅
 
 #### P8.E.1 Bench layout file format
 
@@ -1094,7 +1094,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.F — Conformance test runner (D9)
+### P8.F — Conformance test runner (D9) ✅
 
 #### P8.F.1 Profile schema
 
@@ -1112,7 +1112,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.G — IED simulator (D8)
+### P8.G — IED simulator (D8) ✅
 
 #### P8.G.1 MMS server backed by SCL data model
 
@@ -1127,7 +1127,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.H — PCAP open mode (D7)
+### P8.H — PCAP open mode (D7) ✅
 
 #### P8.H.1 GOOSE / SV / MMS dissection
 
@@ -1144,7 +1144,7 @@ Each is its own task with its own AC/tests.  Shapes mirror P8.B.5.
 
 ---
 
-### P8.I — Cross-cutting
+### P8.I — Cross-cutting ✅
 
 #### P8.I.1 Audit-log row schema for IEC 61850 ✅
 
