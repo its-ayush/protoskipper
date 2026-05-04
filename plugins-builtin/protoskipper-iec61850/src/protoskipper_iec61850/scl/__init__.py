@@ -6,11 +6,12 @@ round-trip serialisation.
 
 Phase 8:
 * P8.A.2 — schema-validating parser (``parser.py``, ``model.py``)  ✅
-* P8.A.3 — semantic diff engine (``diff.py``)
+* P8.A.3 — semantic diff engine (``diff.py``)  ✅
 """
 
 from __future__ import annotations
 
+from .diff import Change, SclDiff, apply, diff, summary
 from .model import (
     FCDA,
     IED,
@@ -34,17 +35,22 @@ __all__ = [
     "IED",
     "LN",
     "AccessPoint",
+    "Change",
     "ConnectedAP",
     "DataSet",
     "GseControl",
     "LDevice",
     "ReportControl",
     "SampledValueControl",
+    "SclDiff",
     "SclDocument",
     "SubNetwork",
     "Substation",
     "ValidationIssue",
+    "apply",
+    "diff",
     "parse",
+    "summary",
     "validate",
     "write",
 ]
