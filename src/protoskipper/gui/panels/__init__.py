@@ -9,6 +9,7 @@ from protoskipper.gui.panels.iec104_timesync import Iec104TimeSyncPanel
 from protoskipper.gui.panels.object_browser import ObjectBrowserPanel
 from protoskipper.gui.panels.packet_view import PacketViewPanel
 from protoskipper.gui.panels.routing import RoutingPanel
+from protoskipper.gui.panels.schedule_editor import ScheduleEditorPanel
 from protoskipper.gui.panels.scripting_console import ScriptingConsolePanel
 from protoskipper.gui.panels.session_status import SessionStatusPanel
 from protoskipper.gui.panels.watchlist import WatchlistPanel
@@ -21,6 +22,7 @@ __all__ = [
     "ObjectBrowserPanel",
     "PacketViewPanel",
     "RoutingPanel",
+    "ScheduleEditorPanel",
     "ScriptingConsolePanel",
     "SessionStatusPanel",
     "SoePanel",

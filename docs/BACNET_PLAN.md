@@ -1323,7 +1323,19 @@ mirror P7.B.7.
 > `PcapReader.search(query)` accepts either a `FrameQuery` or a raw expression
 > string. `FrameQuery` added to `__all__`.
 
-#### P7.G.3 BACnet/SC dissection (when SSLKEYLOGFILE present) ⬜
+#### P7.G.3 BACnet/SC dissection (when SSLKEYLOGFILE present) ✅
+
+> **Complete (scaffold).** `pcap_sc.py` — `ScPcapDissector` with two back-ends:
+> `pyshark` (TLS decryption via `tshark` + SSLKEYLOGFILE, using
+> `override_prefs={"tls.keylog_file": ...}`) and plaintext WebSocket via
+> `dpkt` (TCP stream reassembly + WebSocket frame masking). `KeyLogFile.load()`
+> parses NSS SSLKEYLOGFILE format (all TLS 1.2/1.3 label types).
+> `KeyLogFile.lookup(client_random)` does case-insensitive hex search.
+> `ScBACnetFrame` dataclass captures timestamp, src/dst, ws_opcode,
+> bvlc_sc_function (Annex YY 6-byte fixed header), message_id, npdu_raw,
+> apdu_type, service, decrypted flag. `_parse_npdu_apdu()` reuses
+> APDU_TYPES/CONFIRMED_SERVICES/UNCONFIRMED_SERVICES from `pcap.py`.
+> `TLSDecryptionUnavailable` raised when pyshark/tshark not available.
 
 ---
 
@@ -1363,7 +1375,16 @@ mirror P7.B.7.
 > `subscribe_events`, `read_trend_log`, `time_sync`, `reinitialize`,
 > `dcc`, `read_bdt`, `read_fdt`, `read_file`, `write_file`, `close()`.
 
-#### P7.H.5 Schedule & Calendar timeline editor (§5.8) ⬜
+#### P7.H.5 Schedule & Calendar timeline editor (§5.8) ✅
+
+> **Complete.** `gui/panels/schedule_editor.py` — `ScheduleEditorPanel(QWidget)`
+> with weekly 7-day schedule table (Mon-Sun QComboBox selector), per-day entry
+> QTableWidget (Time / Value columns), Add/Edit/Remove entry dialogs
+> (`_EntryDialog`). Read-only exception list (QListWidget). Load button calls
+> `session_manager.read()` for the target schedule object. Write button calls
+> `session_manager.prepare_write()` for the `weeklySchedule` property.
+> Live preview label calls `evaluate_weekly_schedule()` from `simulator.py`.
+> `ScheduleEditorPanel` exported from `gui/panels/__init__.py`.
 
 #### P7.H.6 Diff against points list (§5.15) ✅
 

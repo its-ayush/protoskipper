@@ -781,3 +781,136 @@ class TestFrameQuery:
         q = FrameQuery("service == readProperty")
         # Ensure match() works
         assert q.match(self._frame(service="readProperty"))
+
+
+# ---------------------------------------------------------------------------
+# P7.G.3 -- ScPcapDissector / KeyLogFile / ScBACnetFrame
+# ---------------------------------------------------------------------------
+
+
+class TestScPcapDissector:
+    def test_imports(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import (
+            BVLC_SC_FUNCTIONS,
+            KeyLogFile,
+            ScBACnetFrame,
+            ScPcapDissector,
+            TLSDecryptionUnavailable,
+        )
+
+        assert ScPcapDissector is not None
+        assert TLSDecryptionUnavailable is not None
+        assert ScBACnetFrame is not None
+        assert KeyLogFile is not None
+        assert BVLC_SC_FUNCTIONS is not None
+
+    def test_bvlc_sc_functions_table(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import BVLC_SC_FUNCTIONS
+
+        assert BVLC_SC_FUNCTIONS[0x01] == "Encapsulated-NPDU"
+        assert BVLC_SC_FUNCTIONS[0x06] == "Connect-Request"
+        assert BVLC_SC_FUNCTIONS[0x0B] == "Heartbeat-ACK"
+
+    def test_key_log_file_load_missing_raises(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import KeyLogFile
+
+        with pytest.raises(FileNotFoundError):
+            KeyLogFile.load("/no/such/sslkeys.log")
+
+    def test_key_log_file_parse(self, tmp_path: Any) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import KeyLogFile
+
+        content = (
+            "# TLS secrets\n"
+            "CLIENT_RANDOM aabbccdd1122 0011223344556677\n"
+            "CLIENT_TRAFFIC_SECRET_0 aabbccdd1122 99aabbccdd\n"
+            "UNKNOWN_LABEL foo bar\n"
+            "  \n"
+        )
+        path = tmp_path / "keys.log"
+        path.write_text(content)
+        kl = KeyLogFile.load(str(path))
+        assert len(kl) == 2
+        assert kl.entries[0].label == "CLIENT_RANDOM"
+        assert kl.entries[0].client_random == "aabbccdd1122"
+
+    def test_key_log_lookup(self, tmp_path: Any) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import KeyLogFile
+
+        content = "CLIENT_RANDOM aabbccdd 001122\nCLIENT_RANDOM eeff1234 334455\n"
+        path = tmp_path / "k.log"
+        path.write_text(content)
+        kl = KeyLogFile.load(str(path))
+        found = kl.lookup("AABBCCDD")  # case-insensitive
+        assert len(found) == 1
+        assert found[0].client_random == "aabbccdd"
+
+    def test_sc_bacnet_frame_defaults(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import ScBACnetFrame
+
+        frame = ScBACnetFrame()
+        assert frame.bvlc_sc_function == ""
+        assert frame.decrypted is False
+        assert frame.npdu_raw == b""
+
+    def test_dissector_no_key_log_raises_on_missing_file(self, tmp_path: Any) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import (
+            ScPcapDissector,
+            TLSDecryptionUnavailable,
+        )
+
+        d = ScPcapDissector(tmp_path / "nope.pcap", key_log=None)
+        with pytest.raises((TLSDecryptionUnavailable, FileNotFoundError, OSError)):
+            d.frames()
+
+    def test_bvlc_sc_parse_encapsulated_npdu(self) -> None:
+        """_parse_bvlc_sc correctly decodes an Encapsulated-NPDU header."""
+        from protoskipper.builtin_drivers.bacnet.pcap_sc import ScBACnetFrame, ScPcapDissector
+
+        # BVLC-SC header: func=0x01, flags=0x00, length=8, msg_id=1
+        # NPDU: version=1, flags=0x04 (no routing)
+        # APDU: unconfirmed whoIs (type=1 -> 0x10, service=8)
+        bvlc_header = bytes([0x01, 0x00, 0x00, 0x08, 0x00, 0x01])
+        npdu = bytes([0x01, 0x04])
+        apdu = bytes([0x10, 0x08])
+        payload = bvlc_header + npdu + apdu
+
+        d = ScPcapDissector.__new__(ScPcapDissector)
+        frame = ScBACnetFrame(raw=payload)
+        d._parse_bvlc_sc(payload, frame)
+        assert frame.bvlc_sc_function == "Encapsulated-NPDU"
+        assert frame.message_id == 1
+        assert frame.service == "whoIs"
+
+
+# ---------------------------------------------------------------------------
+# P7.H.5 -- ScheduleEditorPanel
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleEditorPanel:
+    def test_import(self) -> None:
+        from protoskipper.gui.panels.schedule_editor import ScheduleEditorPanel
+
+        assert ScheduleEditorPanel is not None
+
+    def test_in_panels_all(self) -> None:
+        from protoskipper.gui import panels
+
+        assert "ScheduleEditorPanel" in panels.__all__
+
+    def test_entry_dialog_entry(self) -> None:
+        from protoskipper.gui.panels.schedule_editor import _EntryDialog
+
+        # _EntryDialog.entry() is a pure data method; test without Qt instantiation
+        # by mocking the line-edit values
+        dlg = _EntryDialog.__new__(_EntryDialog)
+        from unittest.mock import MagicMock
+
+        dlg._time_edit = MagicMock()
+        dlg._time_edit.text.return_value = "08:30:00"
+        dlg._value_edit = MagicMock()
+        dlg._value_edit.text.return_value = "21.5"
+        e = dlg.entry()
+        assert e["time"] == "08:30:00"
+        assert e["value"] == "21.5"
