@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
@@ -56,10 +56,14 @@ from protoskipper_iec61850._mms_client import (
     FC_MX,
     FC_SP,
     FC_ST,
+    TRG_OPS_DATA_CHANGE,
+    TRG_OPS_QUALITY_CHANGE,
     MmsClient,
     MmsConnectError,
     MmsDecodedValue,
     MmsDirectoryError,
+    RcbValues,
+    ReportEntry,
 )
 
 _logger = logging.getLogger(__name__)
@@ -454,6 +458,61 @@ class Iec61850MmsSession(DriverSession):
         )
         self.safety.record_write_outcome(result)
         return result
+
+    def subscribe_report(
+        self,
+        rcb_ref: str,
+        is_buffered: bool,
+        on_report: Callable[[ReportEntry], None],
+        trg_ops: int = TRG_OPS_DATA_CHANGE | TRG_OPS_QUALITY_CHANGE,
+        intg_pd: int = 0,
+    ) -> RcbValues:
+        """Enable reporting on a Report Control Block and install a callback.
+
+        Parameters
+        ----------
+        rcb_ref:
+            Full RCB reference, e.g. ``"LD0/LLN0.BR.rcbMeas01"``.
+        is_buffered:
+            ``True`` for BRCB, ``False`` for URCB.
+        on_report:
+            Callable invoked on the session thread for each incoming report.
+        trg_ops:
+            ``TriggerOptions`` bitmask (combination of ``TRG_OPS_*``
+            constants from ``protoskipper_iec61850._mms_client``).
+        intg_pd:
+            Integrity period in milliseconds.  0 = disabled.
+
+        Returns
+        -------
+        RcbValues
+            Snapshot of the RCB attributes after enabling.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.enable_report(rcb_ref, is_buffered, trg_ops, intg_pd, on_report)
+
+    def unsubscribe_report(self, rcb_ref: str, is_buffered: bool) -> None:
+        """Disable reporting on a Report Control Block and remove the handler.
+
+        Safe to call when there is no active client or when reporting was
+        never enabled for *rcb_ref*.
+
+        Parameters
+        ----------
+        rcb_ref:
+            Full RCB reference.
+        is_buffered:
+            ``True`` for BRCB, ``False`` for URCB.
+        """
+        if self._client is not None:
+            self._client.disable_report(rcb_ref, is_buffered)
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""

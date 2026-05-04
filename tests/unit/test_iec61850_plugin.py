@@ -1,5 +1,7 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
-"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 / P8.B.4 / P8.B.5 contract.
+"""Unit tests for the IEC 61850 plugin.
+
+Covers: P8.A.1 / P8.B.2 / P8.B.3 / P8.B.4 / P8.B.5 / P8.B.6 contract.
 
 Tests verify that:
 * The plugin package imports cleanly.
@@ -840,3 +842,221 @@ class TestCommitWrite:
         result = session.commit_write(intent)
         assert result.success is False
         session.safety.record_write_outcome.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# P8.B.6 — Reporting (BRCB / URCB)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_client_with_internals():  # type: ignore[no-untyped-def]
+    """Return a MmsClient with _lib and _con mocked for low-level tests."""
+    from unittest.mock import MagicMock
+
+    from protoskipper_iec61850._mms_client import MmsClient
+
+    client = MmsClient("10.0.0.1", 102)
+    client._lib = MagicMock()
+    client._con = MagicMock()
+    # Sensible IED_ERROR_OK default
+    client._lib.IED_ERROR_OK = 0
+    return client
+
+
+class TestMmsClientGetRcbValues:
+    """MmsClient.get_rcb_values() reads RCB attributes and returns RcbValues."""
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        mock_rcb = MagicMock()
+        lib.IedConnection_getRCBValues.return_value = (mock_rcb, 0)  # (rcb, IED_ERROR_OK)
+        lib.ClientReportControlBlock_getRptId.return_value = "myRptId"
+        lib.ClientReportControlBlock_getDatSet.return_value = "LD0/LLN0$ds1"
+        lib.ClientReportControlBlock_getConfRev.return_value = 1
+        lib.ClientReportControlBlock_getOptFlds.return_value = 10
+        lib.ClientReportControlBlock_getBufTm.return_value = 0
+        lib.ClientReportControlBlock_getTrgOps.return_value = 6  # dchg | qchg
+        lib.ClientReportControlBlock_getIntgPd.return_value = 0
+        lib.ClientReportControlBlock_getRptEna.return_value = False
+        lib.ClientReportControlBlock_getResv.return_value = False
+        return client, lib, mock_rcb
+
+    def test_returns_rcb_values_on_success(self) -> None:
+        from protoskipper_iec61850._mms_client import RcbValues
+
+        client, _lib, _rcb = self._setup()
+        result = client.get_rcb_values("LD0/LLN0.BR.rcb01", is_buffered=True)
+        assert isinstance(result, RcbValues)
+        assert result.rcb_ref == "LD0/LLN0.BR.rcb01"
+        assert result.is_buffered is True
+        assert result.rpt_id == "myRptId"
+        assert result.dat_set == "LD0/LLN0$ds1"
+        assert result.trg_ops == 6
+
+    def test_destroys_rcb_after_success(self) -> None:
+        client, lib, mock_rcb = self._setup()
+        client.get_rcb_values("LD0/LLN0.BR.rcb01", is_buffered=True)
+        lib.ClientReportControlBlock_destroy.assert_called_once_with(mock_rcb)
+
+    def test_raises_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = _make_mock_client_with_internals()
+        client._lib.IedConnection_getRCBValues.return_value = (None, 1)  # error
+        with pytest.raises(MmsDirectoryError):
+            client.get_rcb_values("LD0/LLN0.BR.rcb01", is_buffered=True)
+
+    def test_resv_false_for_brcb(self) -> None:
+        client, lib, _rcb = self._setup()
+        lib.ClientReportControlBlock_getResv.return_value = True  # would be True if asked
+        result = client.get_rcb_values("LD0/LLN0.BR.rcb01", is_buffered=True)
+        assert result.resv is False  # ignored for BRCB
+
+
+class TestMmsClientEnableReport:
+    """MmsClient.enable_report() installs handler and sets RptEna=True."""
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        mock_rcb = MagicMock()
+        lib.IedConnection_getRCBValues.return_value = (mock_rcb, 0)
+        lib.ClientReportControlBlock_getRptId.return_value = "rptId1"
+        lib.ClientReportControlBlock_getDatSet.return_value = "LD0/ds1"
+        lib.ClientReportControlBlock_getConfRev.return_value = 0
+        lib.ClientReportControlBlock_getOptFlds.return_value = 0
+        lib.ClientReportControlBlock_getBufTm.return_value = 0
+        lib.ClientReportControlBlock_getTrgOps.return_value = 6
+        lib.ClientReportControlBlock_getIntgPd.return_value = 0
+        lib.ClientReportControlBlock_getRptEna.return_value = True
+        lib.ClientReportControlBlock_getResv.return_value = False
+        lib.IedConnection_setRCBValues.return_value = 0  # IED_ERROR_OK
+        return client, lib, mock_rcb
+
+    def test_installs_handler_when_callback_provided(self) -> None:
+        client, lib, _ = self._setup()
+        client.enable_report("LD0/LLN0.BR.rcb01", True, on_report=lambda r: None)
+        lib.IedConnection_installReportHandler.assert_called_once()
+
+    def test_no_handler_installed_without_callback(self) -> None:
+        client, lib, _ = self._setup()
+        client.enable_report("LD0/LLN0.BR.rcb01", True, on_report=None)
+        lib.IedConnection_installReportHandler.assert_not_called()
+
+    def test_sets_rpt_ena_true(self) -> None:
+        client, lib, mock_rcb = self._setup()
+        client.enable_report("LD0/LLN0.BR.rcb01", True, on_report=None)
+        lib.ClientReportControlBlock_setRptEna.assert_called_once_with(mock_rcb, True)
+
+    def test_handler_stored_to_prevent_gc(self) -> None:
+        client, _lib, _ = self._setup()
+        callback = lambda r: None  # noqa: E731
+        client.enable_report("LD0/LLN0.BR.rcb01", True, on_report=callback)
+        assert "LD0/LLN0.BR.rcb01" in client._report_handlers
+
+    def test_raises_on_get_rcb_failure(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = _make_mock_client_with_internals()
+        client._lib.IedConnection_getRCBValues.return_value = (None, 14)  # timeout
+        with pytest.raises(MmsDirectoryError):
+            client.enable_report("LD0/LLN0.BR.rcb01", True, on_report=None)
+
+
+class TestMmsClientDisableReport:
+    """MmsClient.disable_report() sets RptEna=False and clears handler ref."""
+
+    def _setup(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        mock_rcb = MagicMock()
+        lib.IedConnection_getRCBValues.return_value = (mock_rcb, 0)
+        lib.ClientReportControlBlock_getRptId.return_value = "rptId1"
+        lib.IedConnection_setRCBValues.return_value = 0
+        client._report_handlers["LD0/LLN0.BR.rcb01"] = lambda: None
+        return client, lib, mock_rcb
+
+    def test_sets_rpt_ena_false(self) -> None:
+        client, lib, mock_rcb = self._setup()
+        client.disable_report("LD0/LLN0.BR.rcb01", True)
+        lib.ClientReportControlBlock_setRptEna.assert_called_once_with(mock_rcb, False)
+
+    def test_clears_handler_ref(self) -> None:
+        client, _lib, _ = self._setup()
+        assert "LD0/LLN0.BR.rcb01" in client._report_handlers
+        client.disable_report("LD0/LLN0.BR.rcb01", True)
+        assert "LD0/LLN0.BR.rcb01" not in client._report_handlers
+
+    def test_does_not_raise_on_get_rcb_failure(self) -> None:
+        client = _make_mock_client_with_internals()
+        client._lib.IedConnection_getRCBValues.return_value = (None, 1)
+        client.disable_report("LD0/LLN0.BR.rcb01", True)  # must not raise
+
+
+class TestSessionReporting:
+    """Iec61850MmsSession.subscribe_report / unsubscribe_report delegate to MmsClient."""
+
+    @pytest.fixture
+    def session(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    def test_subscribe_delegates_to_client(self, session) -> None:
+        from protoskipper_iec61850._mms_client import RcbValues
+
+        session._client.enable_report.return_value = RcbValues(
+            rcb_ref="LD0/LLN0.BR.rcb01", is_buffered=True
+        )
+        cb = lambda r: None  # noqa: E731
+        result = session.subscribe_report("LD0/LLN0.BR.rcb01", True, cb)
+        session._client.enable_report.assert_called_once_with(
+            "LD0/LLN0.BR.rcb01",
+            True,
+            6,
+            0,
+            cb,  # default trg_ops = 2|4 = 6
+        )
+        assert isinstance(result, RcbValues)
+
+    def test_unsubscribe_delegates_to_client(self, session) -> None:
+        session.unsubscribe_report("LD0/LLN0.BR.rcb01", True)
+        session._client.disable_report.assert_called_once_with("LD0/LLN0.BR.rcb01", True)
+
+    def test_subscribe_no_client_raises(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
+        with pytest.raises(MmsDirectoryError):
+            session.subscribe_report("LD0/LLN0.BR.rcb01", True, lambda r: None)
+
+    def test_unsubscribe_no_client_is_noop(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
+        session.unsubscribe_report("LD0/LLN0.BR.rcb01", True)  # must not raise

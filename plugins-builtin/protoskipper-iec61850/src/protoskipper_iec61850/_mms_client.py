@@ -41,7 +41,7 @@ A :class:`MmsClient` instance must be used from a single thread only.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from protoskipper.core.errors import ConnectionFailure, DriverError, EncodingError
@@ -125,6 +125,32 @@ _ADD_CAUSE_NAMES: dict[int, str] = {
 
 def _add_cause_name(code: int) -> str:
     return _ADD_CAUSE_NAMES.get(code, f"ADD_CAUSE_{code}")
+
+
+# ---------------------------------------------------------------------------
+# Reporting constants (P8.B.6)
+# ---------------------------------------------------------------------------
+# TriggerOptions bits (IEC 61850-7-2 §9.1.3 / libiec61850 TriggerOptions enum)
+# ---------------------------------------------------------------------------
+TRG_OPS_DATA_CHANGE: int = 2  # dchg
+TRG_OPS_QUALITY_CHANGE: int = 4  # qchg
+TRG_OPS_DATA_UPDATE: int = 8  # dupd
+TRG_OPS_INTEGRITY: int = 64  # period
+TRG_OPS_GI: int = 128  # general interrogation
+
+# ReasonForInclusion values (libiec61850 ReasonForInclusion enum)
+REASON_NOT_INCLUDED: int = 0
+REASON_DATA_CHANGE: int = 1
+REASON_QUALITY_CHANGE: int = 2
+REASON_DATA_UPDATE: int = 4
+REASON_INTEGRITY: int = 8
+REASON_GI: int = 16
+
+# RCB element mask bits for IedConnection_setRCBValues parametersMask
+# (libiec61850 ClientReportControlBlock_ElementsToSet)
+_RCB_ELEMENT_RPT_ENA: int = 2
+_RCB_ELEMENT_TRG_OPS: int = 256
+_RCB_ELEMENT_INTG_PD: int = 512
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +273,86 @@ class ControlResult:
     error_str: str = ""
 
 
+@dataclass
+class RcbValues:
+    """Snapshot of a Report Control Block's key attributes.
+
+    Attributes
+    ----------
+    rcb_ref:
+        Full RCB reference, e.g. ``"LD0/LLN0.BR.rcbMeas01"``.
+    is_buffered:
+        True for BRCB, False for URCB.
+    rpt_id:
+        Report ID string (``RptID`` attribute).
+    dat_set:
+        Dataset reference (``DatSet`` attribute).
+    conf_rev:
+        Configuration revision counter.
+    opt_flds:
+        OptFlds bit mask.
+    buf_tm:
+        Buffer time in milliseconds.
+    trg_ops:
+        TriggerOptions bit mask (see ``TRG_OPS_*`` constants).
+    intg_pd:
+        Integrity period in milliseconds (0 = disabled).
+    rpt_ena:
+        True if reporting is currently enabled.
+    resv:
+        True if the RCB is reserved (URCB only).
+    """
+
+    rcb_ref: str
+    is_buffered: bool
+    rpt_id: str = ""
+    dat_set: str = ""
+    conf_rev: int = 0
+    opt_flds: int = 0
+    buf_tm: int = 0
+    trg_ops: int = 0
+    intg_pd: int = 0
+    rpt_ena: bool = False
+    resv: bool = False  # URCB only
+
+
+@dataclass
+class ReportEntry:
+    """One decoded incoming report from a BRCB or URCB.
+
+    Attributes
+    ----------
+    rcb_ref:
+        Reference of the subscribed RCB.
+    rpt_id:
+        Report ID from the PDU.
+    dataset_ref:
+        Dataset reference from the PDU.
+    is_buffered:
+        True if report came from a BRCB.
+    has_timestamp:
+        True if the report PDU contains a timestamp.
+    timestamp_ms:
+        Report timestamp in milliseconds since the Unix epoch.
+        0 when :attr:`has_timestamp` is False.
+    seq_num:
+        Sequence number from the report PDU (0 if not included).
+    entries:
+        Per-member ``(reason: int, value: Any)`` pairs.  *reason* is one
+        of the ``REASON_*`` constants; *value* is the decoded Python
+        primitive (same encoding as :func:`_mms_value_to_python`).
+    """
+
+    rcb_ref: str
+    rpt_id: str
+    dataset_ref: str
+    is_buffered: bool
+    has_timestamp: bool = False
+    timestamp_ms: int = 0
+    seq_num: int = 0
+    entries: list[tuple[int, Any]] = field(default_factory=list)
+
+
 def _mms_value_to_python(lib: Any, val: Any) -> Any:
     """Recursively convert a pyiec61850 ``MmsValue`` to a Python object.
 
@@ -330,6 +436,48 @@ def _python_to_mms_ctlval(lib: Any, value: Any) -> Any:
         f"Cannot encode {type(value).__name__!r} as MMS ctlVal; "
         "only bool, int, and float are supported."
     )
+
+
+def _on_incoming_report(
+    lib: Any,
+    report: Any,
+    rcb_ref: str,
+    is_buffered: bool,
+    callback: Any,
+) -> None:
+    """Decode a libiec61850 ``ClientReport`` and invoke *callback*.
+
+    Errors during decoding are caught and logged at DEBUG level so that a
+    malformed report never crashes the connection thread.
+    """
+    try:
+        rpt_id = str(lib.ClientReport_getRptId(report) or "")
+        dataset_ref = str(lib.ClientReport_getDataSetName(report) or "")
+        has_ts = bool(lib.ClientReport_hasTimestamp(report))
+        ts_ms = int(lib.ClientReport_getTimestamp(report)) if has_ts else 0
+        seq_num_raw = getattr(lib, "ClientReport_getSeqNum", None)
+        seq_num = int(seq_num_raw(report)) if seq_num_raw is not None else 0
+        n = int(lib.ClientReport_getDataSetEntryCount(report))
+        data_vals = lib.ClientReport_getDataSetValues(report)
+        entries: list[tuple[int, Any]] = []
+        for i in range(n):
+            reason = int(lib.ClientReport_getReasonForInclusion(report, i))
+            member = _mms_value_to_python(lib, lib.MmsValue_getElement(data_vals, i))
+            entries.append((reason, member))
+        callback(
+            ReportEntry(
+                rcb_ref=rcb_ref,
+                rpt_id=rpt_id,
+                dataset_ref=dataset_ref,
+                is_buffered=is_buffered,
+                has_timestamp=has_ts,
+                timestamp_ms=ts_ms,
+                seq_num=seq_num,
+                entries=entries,
+            )
+        )
+    except Exception:
+        _log.debug("Error processing incoming report for %r", rcb_ref, exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +616,8 @@ class MmsClient:
         self._con: Any = None
         self._lib: Any = None
         self._pdu_size: int = 0
+        # Stores report handler closures keyed by rcb_ref to prevent GC
+        self._report_handlers: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -529,6 +679,7 @@ class MmsClient:
                 self._lib.IedConnection_destroy(self._con)
                 self._con = None
             _log.debug("MMS close OK host=%s port=%d", self._host, self._port)
+        self._report_handlers.clear()
 
     def abort(self) -> None:
         """Send an MMS Abort (used when the peer resets unexpectedly).
@@ -828,6 +979,181 @@ class MmsClient:
             raise
         finally:
             lib.ControlObjectClient_destroy(ctrl)
+
+    # ------------------------------------------------------------------
+    # Reporting services (P8.B.6)
+    # ------------------------------------------------------------------
+    #
+    # GetRCBValues returns a ``ClientReportControlBlock*`` whose attributes
+    # are read via ``ClientReportControlBlock_*`` getters and then freed via
+    # ``ClientReportControlBlock_destroy``.  SetRCBValues transmits only the
+    # attributes indicated by the ``parametersMask`` bitmask
+    # (``_RCB_ELEMENT_*`` constants).
+    #
+    # The report handler installed via ``IedConnection_installReportHandler``
+    # is stored in ``self._report_handlers[rcb_ref]`` to prevent the closure
+    # from being garbage-collected while reporting is active.
+
+    def get_rcb_values(self, rcb_ref: str, is_buffered: bool) -> RcbValues:
+        """Read current attribute values of a Report Control Block.
+
+        Parameters
+        ----------
+        rcb_ref:
+            Full RCB reference, e.g. ``"LD0/LLN0.BR.rcbMeas01"``.
+        is_buffered:
+            True for BRCB, False for URCB.
+
+        Returns
+        -------
+        RcbValues
+            Snapshot of the RCB state.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK error code.
+        """
+        lib = self._lib
+        rcb, error = lib.IedConnection_getRCBValues(self._con, rcb_ref, is_buffered)
+        if error != lib.IED_ERROR_OK:
+            if rcb is not None:
+                lib.ClientReportControlBlock_destroy(rcb)
+            raise MmsDirectoryError(
+                f"GetRCBValues({rcb_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        try:
+            rpt_id = str(lib.ClientReportControlBlock_getRptId(rcb) or "")
+            dat_set = str(lib.ClientReportControlBlock_getDatSet(rcb) or "")
+            conf_rev = int(lib.ClientReportControlBlock_getConfRev(rcb))
+            opt_flds = int(lib.ClientReportControlBlock_getOptFlds(rcb))
+            buf_tm = int(lib.ClientReportControlBlock_getBufTm(rcb))
+            trg_ops = int(lib.ClientReportControlBlock_getTrgOps(rcb))
+            intg_pd = int(lib.ClientReportControlBlock_getIntgPd(rcb))
+            rpt_ena = bool(lib.ClientReportControlBlock_getRptEna(rcb))
+            resv = bool(lib.ClientReportControlBlock_getResv(rcb)) if not is_buffered else False
+        finally:
+            lib.ClientReportControlBlock_destroy(rcb)
+        return RcbValues(
+            rcb_ref=rcb_ref,
+            is_buffered=is_buffered,
+            rpt_id=rpt_id,
+            dat_set=dat_set,
+            conf_rev=conf_rev,
+            opt_flds=opt_flds,
+            buf_tm=buf_tm,
+            trg_ops=trg_ops,
+            intg_pd=intg_pd,
+            rpt_ena=rpt_ena,
+            resv=resv,
+        )
+
+    def enable_report(
+        self,
+        rcb_ref: str,
+        is_buffered: bool,
+        trg_ops: int = TRG_OPS_DATA_CHANGE | TRG_OPS_QUALITY_CHANGE,
+        intg_pd: int = 0,
+        on_report: Any = None,
+    ) -> RcbValues:
+        """Enable reporting for a Report Control Block.
+
+        Installs a Python callback (if provided), sets ``TrgOps`` and
+        ``IntgPd``, and enables reporting by setting ``RptEna=True``.
+
+        Parameters
+        ----------
+        rcb_ref:
+            Full RCB reference, e.g. ``"LD0/LLN0.BR.rcbMeas01"``.
+        is_buffered:
+            True for BRCB, False for URCB.
+        trg_ops:
+            ``TriggerOptions`` bitmask (combination of ``TRG_OPS_*``).
+        intg_pd:
+            Integrity period in milliseconds.  0 = disabled.
+        on_report:
+            Callable invoked with a :class:`ReportEntry` for each incoming
+            report.  ``None`` = install no handler (reports are discarded).
+
+        Returns
+        -------
+        RcbValues
+            Snapshot of the RCB attributes *after* enabling.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If ``GetRCBValues`` or ``SetRCBValues`` fails.
+        """
+        lib = self._lib
+        rcb, error = lib.IedConnection_getRCBValues(self._con, rcb_ref, is_buffered)
+        if error != lib.IED_ERROR_OK:
+            if rcb is not None:
+                lib.ClientReportControlBlock_destroy(rcb)
+            raise MmsDirectoryError(
+                f"GetRCBValues({rcb_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        try:
+            rpt_id = str(lib.ClientReportControlBlock_getRptId(rcb) or "")
+            if on_report is not None:
+
+                def _handler(con: Any, report: Any, param: Any) -> None:
+                    _on_incoming_report(lib, report, rcb_ref, is_buffered, on_report)
+
+                self._report_handlers[rcb_ref] = _handler
+                lib.IedConnection_installReportHandler(self._con, rcb_ref, rpt_id, _handler, None)
+            lib.ClientReportControlBlock_setTrgOps(rcb, trg_ops)
+            lib.ClientReportControlBlock_setIntgPd(rcb, intg_pd)
+            lib.ClientReportControlBlock_setRptEna(rcb, True)
+            mask = _RCB_ELEMENT_RPT_ENA | _RCB_ELEMENT_TRG_OPS | _RCB_ELEMENT_INTG_PD
+            error2 = lib.IedConnection_setRCBValues(self._con, rcb, mask, True)
+            if error2 != lib.IED_ERROR_OK:
+                self._report_handlers.pop(rcb_ref, None)
+                raise MmsDirectoryError(
+                    f"SetRCBValues(RptEna=True) for {rcb_ref!r} failed: {_ied_error_name(error2)}",
+                    error_code=error2,
+                )
+        finally:
+            lib.ClientReportControlBlock_destroy(rcb)
+
+        # Return a fresh snapshot so the caller knows the live RCB state
+        return self.get_rcb_values(rcb_ref, is_buffered)
+
+    def disable_report(self, rcb_ref: str, is_buffered: bool) -> None:
+        """Disable reporting for a Report Control Block.
+
+        Sets ``RptEna=False`` and removes the installed report handler.
+        Errors during the ``GetRCBValues`` or ``SetRCBValues`` calls are
+        logged at WARNING level and do not raise so that ``close()`` can
+        always clean up.
+
+        Parameters
+        ----------
+        rcb_ref:
+            Full RCB reference.
+        is_buffered:
+            True for BRCB, False for URCB.
+        """
+        lib = self._lib
+        rcb, error = lib.IedConnection_getRCBValues(self._con, rcb_ref, is_buffered)
+        if error != lib.IED_ERROR_OK:
+            _log.warning("GetRCBValues(%r) for disable failed: %s", rcb_ref, _ied_error_name(error))
+            self._report_handlers.pop(rcb_ref, None)
+            return
+        try:
+            lib.ClientReportControlBlock_setRptEna(rcb, False)
+            error2 = lib.IedConnection_setRCBValues(self._con, rcb, _RCB_ELEMENT_RPT_ENA, True)
+            if error2 != lib.IED_ERROR_OK:
+                _log.warning(
+                    "SetRCBValues(RptEna=False) for %r failed: %s",
+                    rcb_ref,
+                    _ied_error_name(error2),
+                )
+        finally:
+            lib.ClientReportControlBlock_destroy(rcb)
+        self._report_handlers.pop(rcb_ref, None)
 
     # ------------------------------------------------------------------
     # Directory services (P8.B.3)
