@@ -105,6 +105,7 @@ class DriverWorker(QObject):
     write_denied = Signal(object)  # WriteIntent
     frame_captured = Signal(CapturedFrame)
     audit_row_written = Signal()  # one emission per audit-log row appended
+    scl_tags_ready = Signal(list)  # list[ObjectRef] — result of get_tag_model()
     closed = Signal()
     error_raised = Signal(str, str)  # operation, message
 
@@ -271,6 +272,33 @@ class DriverWorker(QObject):
         if self._ring_sink is not None:
             self._ring_sink.clear()
             _logger.debug("Capture buffer cleared")
+
+    @Slot()
+    def fetch_scl_tags(self) -> None:
+        """Fetch the IED's SCL configuration and expand it into a tag list.
+
+        Calls ``get_tag_model()`` on the driver session (IEC 61850 only).
+        Emits :attr:`scl_tags_ready` on success, :attr:`error_raised` on failure.
+        """
+        if self._session is None:
+            self.error_raised.emit("fetch_scl_tags", "session not open")
+            return
+        driver_session = self._session.driver_session
+        if not hasattr(driver_session, "get_tag_model"):
+            self.error_raised.emit(
+                "fetch_scl_tags",
+                "driver does not support SCL tag fetch (not an IEC 61850 session)",
+            )
+            return
+        try:
+            refs: list = list(driver_session.get_tag_model())
+        except Exception as exc:
+            _logger.exception("fetch_scl_tags failed")
+            self.error_raised.emit("fetch_scl_tags", str(exc))
+            return
+        self.scl_tags_ready.emit(refs)
+        # Also refresh the object browser with the newly fetched tags.
+        self.objects_enumerated.emit(refs)
 
     @Slot()
     def cancel(self) -> None:

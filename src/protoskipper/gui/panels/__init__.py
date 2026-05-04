@@ -6,6 +6,7 @@ from protoskipper.gui.panels.iec104_bench import Iec104BenchPanel
 from protoskipper.gui.panels.iec104_interrogation import Iec104InterrogationPanel
 from protoskipper.gui.panels.iec104_soe import SoePanel
 from protoskipper.gui.panels.iec104_timesync import Iec104TimeSyncPanel
+from protoskipper.gui.panels.iec61850_browser import Iec61850BrowserPanel
 from protoskipper.gui.panels.object_browser import ObjectBrowserPanel
 from protoskipper.gui.panels.packet_view import PacketViewPanel
 from protoskipper.gui.panels.routing import RoutingPanel
@@ -19,6 +20,7 @@ __all__ = [
     "Iec104BenchPanel",
     "Iec104InterrogationPanel",
     "Iec104TimeSyncPanel",
+    "Iec61850BrowserPanel",
     "ObjectBrowserPanel",
     "PacketViewPanel",
     "RoutingPanel",

@@ -69,6 +69,7 @@ from protoskipper.gui.panels import (
     Iec104BenchPanel,
     Iec104InterrogationPanel,
     Iec104TimeSyncPanel,
+    Iec61850BrowserPanel,
     ObjectBrowserPanel,
     PacketViewPanel,
     ScriptingConsolePanel,
@@ -497,6 +498,12 @@ class MainWindow(QMainWindow):
         self._bench_panel.session_focused.connect(self._on_session_selected)
         self._tabs.addTab(self._bench_panel, "Bench Overview")
 
+        # ---- IEC 61850 browser (additional tab) ----
+        self._iec61850_browser = Iec61850BrowserPanel(self._state, self._session_manager, self)
+        self._iec61850_browser.write_requested.connect(self._open_write_dialog)
+        self._iec61850_browser.add_to_watchlist_requested.connect(self._add_to_watchlist)
+        self._tabs.addTab(self._iec61850_browser, "IEC 61850 Browser")
+
         self.setCentralWidget(self._tabs)
 
         # ---- SOE panel (bottom dock) ----
@@ -739,6 +746,7 @@ class MainWindow(QMainWindow):
         self._soe_panel.set_session(session_id)
         self._interrogation_panel.set_session(session_id)
         self._timesync_panel.set_session(session_id)
+        self._iec61850_browser.set_session(session_id)
         info = self._state.session(SessionId(session_id))
         is_open = info is not None and info.is_open
         self._action_disconnect.setEnabled(is_open)

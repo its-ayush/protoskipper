@@ -330,23 +330,35 @@ class Iec61850MmsSession(DriverSession):
         return self._client.peer_implementation if self._client else ""
 
     def enumerate_objects(self) -> Iterator[ObjectRef]:
-        """Walk the IED data model via MMS GetDirectory services.
+        """Walk the IED data model and yield one ObjectRef per leaf data attribute.
 
-        Traversal order: server -> logical device -> logical node ->
-        data object.  Each data object is yielded as one
-        :class:`~protoskipper.core.driver.ObjectRef`.
+        **Primary path — SCL-based enumeration (P8.B.10):**
+        Downloads the IED's SCL configuration (``conf.xml.gz``, ``*.icd``, …),
+        parses the DataTypeTemplates section, and yields fully-typed leaf data
+        attributes with rich metadata.  This path is faster (one file transfer
+        instead of hundreds of GetDirectory round-trips) and produces better
+        labels.
 
-        Actual data types and writability are resolved during reads
-        (P8.B.4).  ``data_type`` is ``"do"`` for every yielded ref.
+        **Fallback — MMS directory walk:**
+        If the SCL file cannot be fetched or parsed, falls back to the
+        original GetDirectory walk.  Each data object is yielded as one
+        ObjectRef with ``data_type="do"``; actual types are resolved on read.
 
-        Errors on individual directory queries are logged at WARNING and
-        skipped; they do not abort the whole enumeration.
+        Errors on individual directory queries during the fallback walk are
+        logged at WARNING and skipped.
 
         Yields nothing if the session has no active client.
         """
         if self._client is None:
             return
 
+        # --- Try SCL-based enumeration first ---
+        scl_refs = self.enumerate_objects_from_scl()
+        if scl_refs is not None:
+            yield from scl_refs
+            return
+
+        # --- Fallback: MMS directory walk ---
         try:
             ld_names = self._client.get_server_directory()
         except MmsDirectoryError as exc:
@@ -880,3 +892,80 @@ class Iec61850MmsSession(DriverSession):
         if self._client is not None:
             self._client.close()
             self._client = None
+
+    # ------------------------------------------------------------------
+    # SCL tag model (P8.B.10)
+    # ------------------------------------------------------------------
+
+    def get_tag_model(self) -> list[ObjectRef]:
+        """Fetch the IED's SCL configuration and expand it into a flat tag list.
+
+        Downloads the SCL file (``conf.xml.gz``, ``*.icd``, ``*.cid``, …) from
+        the IED, parses the DataTypeTemplates section, and returns one
+        :class:`~protoskipper.core.driver.ObjectRef` per leaf data attribute.
+
+        Each ``ObjectRef`` is populated with:
+
+        * ``object_id`` — ``"LD/LN.DO.DA[FC]"`` (suitable for :meth:`read`)
+        * ``data_type`` — IEC 61850 basic type (``"FLOAT32"``, ``"BOOLEAN"``, …)
+        * ``access`` — ``READ_WRITE`` for settable FCs, ``READ_ONLY`` otherwise
+        * ``label`` — human-readable ``"LD/LN.DO.DA"``
+        * ``metadata`` — rich tree info (``ld_inst``, ``ln_class``, ``ln_ref``,
+          ``ln_inst``, ``do_name``, ``da_path``, ``fc``, ``cdc``)
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the client cannot fetch the SCL file.
+        """
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+
+        xml_bytes = self._client.fetch_scl()
+        tags = expand_tags(xml_bytes)
+
+        self.safety.record_event(
+            "iec61850_scl_fetch",
+            subevent="get_tag_model",
+            target=self.device.address,
+            tag_count=len(tags),
+        )
+
+        refs: list[ObjectRef] = []
+        for tag in tags:
+            refs.append(
+                ObjectRef(
+                    device=self.device,
+                    object_id=tag.object_id,
+                    data_type=tag.basic_type.lower(),
+                    access=Access.READ_WRITE if tag.writable else Access.READ_ONLY,
+                    label=tag.label,
+                    metadata={
+                        "ld_inst": tag.ld_inst,
+                        "ln_ref": tag.ln_ref,
+                        "ln_class": tag.ln_class,
+                        "ln_prefix": tag.ln_prefix,
+                        "ln_inst": tag.ln_inst,
+                        "do_name": tag.do_name,
+                        "da_path": tag.da_path,
+                        "fc": tag.fc,
+                        "cdc": tag.cdc,
+                        "desc": tag.desc,
+                    },
+                )
+            )
+        return refs
+
+    def enumerate_objects_from_scl(self) -> list[ObjectRef] | None:
+        """Try to build the object list from the IED's SCL file.
+
+        Returns ``None`` if SCL is unavailable or cannot be parsed, so the
+        caller can fall back to the MMS directory walk.
+        """
+        try:
+            return self.get_tag_model()
+        except Exception as exc:
+            _logger.debug("SCL tag model unavailable: %s; falling back to MMS walk", exc)
+            return None

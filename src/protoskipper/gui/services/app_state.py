@@ -75,6 +75,9 @@ class ApplicationState(QObject):
     write_completed = Signal(str, WriteResult)
     write_denied = Signal(str, WriteIntent)
 
+    # ---- IEC 61850 SCL tag model ----------------------------------------
+    iec_tags_loaded = Signal(str, list)  # session_id, list[ObjectRef]
+
     # ---- watchlist / capture / misc --------------------------------------
     watchlist_changed = Signal()
     frame_captured = Signal(CapturedFrame)
@@ -146,6 +149,12 @@ class ApplicationState(QObject):
             return
         info.objects = list(objects)
         self.objects_enumerated.emit(session_id, list(objects))
+
+    def record_iec_tags_loaded(self, session_id: SessionId, tags: list[ObjectRef]) -> None:
+        """Record SCL-sourced tags and emit :attr:`iec_tags_loaded`."""
+        # Also update the session's object list so the main browser gets them.
+        self.record_objects_enumerated(session_id, tags)
+        self.iec_tags_loaded.emit(session_id, list(tags))
 
     def record_read_completed(self, session_id: SessionId, result: ReadResult) -> None:
         info = self._sessions.get(session_id)

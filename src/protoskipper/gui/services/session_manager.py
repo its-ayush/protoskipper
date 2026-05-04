@@ -258,6 +258,10 @@ class SessionManager(QObject):
             self._state.record_audit_row_appended,
             Qt.QueuedConnection,
         )
+        worker.scl_tags_ready.connect(
+            lambda tags, sid=session_id: self._state.record_iec_tags_loaded(sid, list(tags)),
+            Qt.QueuedConnection,
+        )
         worker.closed.connect(
             lambda sid=session_id: self._on_worker_closed(sid),
             Qt.QueuedConnection,
@@ -320,6 +324,17 @@ class SessionManager(QObject):
         handle = self._require(session_id)
         _w, _r = handle.worker, ref
         QTimer.singleShot(0, _w, lambda: _w.read(_r))
+
+    def fetch_scl_tags(self, session_id: SessionId) -> None:
+        """Trigger SCL tag model fetch for an IEC 61850 session (non-blocking).
+
+        Schedules :meth:`~DriverWorker.fetch_scl_tags` on the worker thread.
+        Results arrive via :attr:`~ApplicationState.iec_tags_loaded` signal.
+        Raises :exc:`KeyError` if *session_id* is not an active session.
+        """
+        handle = self._require(session_id)
+        _w = handle.worker
+        QTimer.singleShot(0, _w, lambda: _w.fetch_scl_tags())
 
     def read_many(self, session_id: SessionId, refs: list[ObjectRef]) -> None:
         """Dispatch a batch read on the worker thread (non-blocking)."""

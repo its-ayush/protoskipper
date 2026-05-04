@@ -12,6 +12,7 @@ Phase 8:
 from __future__ import annotations
 
 from .diff import Change, SclDiff, apply, diff, summary
+from .dtt import IecTag, expand_tags
 from .model import (
     FCDA,
     IED,
@@ -39,6 +40,7 @@ __all__ = [
     "ConnectedAP",
     "DataSet",
     "GseControl",
+    "IecTag",
     "LDevice",
     "ReportControl",
     "SampledValueControl",
@@ -49,6 +51,7 @@ __all__ = [
     "ValidationIssue",
     "apply",
     "diff",
+    "expand_tags",
     "parse",
     "summary",
     "validate",

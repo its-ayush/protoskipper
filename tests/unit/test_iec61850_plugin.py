@@ -1812,3 +1812,235 @@ class TestIec61850AuditSchema:
         for row in audited:
             if row["event"].startswith("iec61850_"):
                 assert "target" in row, f"Row {row['event']} missing 'target' field"
+
+
+# ---------------------------------------------------------------------------
+# P8.B.10 — SCL DataTypeTemplates expansion
+# ---------------------------------------------------------------------------
+
+_MINIMAL_SCL = b"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<SCL xmlns="http://www.iec.ch/61850/2003/SCL">
+  <IED name="TestIED">
+    <AccessPoint name="S1">
+      <Server>
+        <LDevice inst="LD0">
+          <LN0 lnClass="LLN0" inst="" lnType="LLN0_type"/>
+          <LN lnClass="MMXU" inst="1" lnType="MMXU_type"/>
+        </LDevice>
+      </Server>
+    </AccessPoint>
+  </IED>
+  <DataTypeTemplates>
+    <LNodeType id="LLN0_type" lnClass="LLN0">
+      <DO name="Mod" type="MV_type"/>
+    </LNodeType>
+    <LNodeType id="MMXU_type" lnClass="MMXU">
+      <DO name="A" type="WYE_type"/>
+    </LNodeType>
+    <DOType id="MV_type" cdc="MV">
+      <DA name="stVal" fc="ST" bType="BOOLEAN"/>
+    </DOType>
+    <DOType id="WYE_type" cdc="WYE">
+      <DA name="phsA" fc="MX" bType="Struct" type="CMV_type"/>
+    </DOType>
+    <DAType id="CMV_type">
+      <BDA name="cVal" bType="Struct" type="Vector_type"/>
+      <BDA name="q" bType="Quality"/>
+      <BDA name="t" bType="Timestamp"/>
+    </DAType>
+    <DAType id="Vector_type">
+      <BDA name="mag" bType="Struct" type="AnalogValue_type"/>
+    </DAType>
+    <DAType id="AnalogValue_type">
+      <BDA name="f" bType="FLOAT32"/>
+    </DAType>
+  </DataTypeTemplates>
+</SCL>
+"""
+
+_SCL_WITH_SDO = b"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<SCL xmlns="http://www.iec.ch/61850/2003/SCL">
+  <IED name="IED1">
+    <AccessPoint name="S1">
+      <Server>
+        <LDevice inst="LD1">
+          <LN lnClass="XCBR" inst="1" lnType="XCBR_type"/>
+        </LDevice>
+      </Server>
+    </AccessPoint>
+  </IED>
+  <DataTypeTemplates>
+    <LNodeType id="XCBR_type" lnClass="XCBR">
+      <DO name="Pos" type="DPC_type"/>
+    </LNodeType>
+    <DOType id="DPC_type" cdc="DPC">
+      <SDO name="origin" type="Originator_type"/>
+      <DA name="stVal" fc="ST" bType="BOOLEAN"/>
+    </DOType>
+    <DOType id="Originator_type" cdc="">
+      <DA name="orCat" fc="ST" bType="Enum"/>
+    </DOType>
+  </DataTypeTemplates>
+</SCL>
+"""
+
+
+class TestExpandTags:
+    """expand_tags() expands DataTypeTemplates into flat IecTag lists."""
+
+    def test_returns_empty_for_empty_scl(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        empty = b'<SCL xmlns="http://www.iec.ch/61850/2003/SCL"/>'
+        assert expand_tags(empty) == []
+
+    def test_basic_leaf_count(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        # LLN0: Mod.stVal (1 leaf) + MMXU1: A.phsA.cVal.mag.f, A.phsA.q, A.phsA.t (3 leaves)
+        assert len(tags) == 4
+
+    def test_fc_propagated_to_bda_leaves(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        mx_tags = [t for t in tags if t.fc == "MX"]
+        # phsA.cVal.mag.f, phsA.q, phsA.t all inherit MX from DA phsA
+        assert len(mx_tags) == 3
+
+    def test_mms_path_format(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        paths = {t.mms_path for t in tags}
+        assert "LD0/MMXU1.A.phsA.cVal.mag.f" in paths
+
+    def test_object_id_has_fc_suffix(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        oids = {t.object_id for t in tags}
+        assert "LD0/MMXU1.A.phsA.cVal.mag.f[MX]" in oids
+
+    def test_writable_fc_flagged_correctly(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        for tag in tags:
+            if tag.fc == "SP":
+                assert tag.writable
+            elif tag.fc in ("ST", "MX"):
+                assert not tag.writable
+
+    def test_sdo_expansion(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_SCL_WITH_SDO)
+        paths = {t.mms_path for t in tags}
+        # SDO origin expands → LD1/XCBR1.Pos.origin.orCat
+        assert "LD1/XCBR1.Pos.origin.orCat" in paths
+        # Regular DA stVal
+        assert "LD1/XCBR1.Pos.stVal" in paths
+
+    def test_ied_name_filter(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        # Only expand "TestIED" — won't match if IED name filter is applied
+        tags_all = expand_tags(_MINIMAL_SCL)
+        tags_match = expand_tags(_MINIMAL_SCL, ied_name="TestIED")
+        tags_no_match = expand_tags(_MINIMAL_SCL, ied_name="NONEXISTENT")
+        assert len(tags_all) == len(tags_match)
+        assert tags_no_match == []
+
+    def test_cdc_set_on_tags(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        wye_tags = [t for t in tags if t.ln_class == "MMXU"]
+        assert all(t.cdc == "WYE" for t in wye_tags)
+
+    def test_tree_path_property(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        tags = expand_tags(_MINIMAL_SCL)
+        mmxu_tag = next(t for t in tags if t.ln_class == "MMXU")
+        assert mmxu_tag.tree_path == ("LD0", "MMXU1", "A")
+
+    def test_bom_stripped(self) -> None:
+        from protoskipper_iec61850.scl.dtt import expand_tags
+
+        bom_scl = b"\xef\xbb\xbf" + _MINIMAL_SCL
+        tags = expand_tags(bom_scl)
+        assert len(tags) == 4  # same result regardless of BOM
+
+
+class TestMmsClientFetchScl:
+    """MmsClient.fetch_scl() tries candidate filenames and scans directory."""
+
+    def _make_client(self) -> object:
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        lib.IedGetFileBytes.return_value = (b"", 20)  # default: not found
+        lib.IedGetFileDirStr.return_value = ("", 0)
+        return client
+
+    def test_fetches_conf_xml_gz_and_decompresses(self) -> None:
+        import gzip
+
+        client = self._make_client()
+        xml = b"<SCL/>"
+        gz_data = gzip.compress(xml)
+        client._lib.IedGetFileBytes.side_effect = None
+
+        def get_bytes(con, name):  # type: ignore[no-untyped-def]
+            if name == "conf.xml.gz":
+                return (gz_data, 0)
+            return (b"", 20)  # IED_ERROR_TIMEOUT for all others
+
+        client._lib.IedGetFileBytes.side_effect = get_bytes
+        result = client.fetch_scl()
+        assert result == xml
+
+    def test_falls_back_to_conf_xml(self) -> None:
+
+        client = self._make_client()
+        xml = b"<SCL plain/>"
+
+        def get_bytes(con, name):  # type: ignore[no-untyped-def]
+            if name == "conf.xml":
+                return (xml, 0)
+            return (b"", 20)
+
+        client._lib.IedGetFileBytes.side_effect = get_bytes
+        result = client.fetch_scl()
+        assert result == xml
+
+    def test_raises_if_no_scl_found(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client = self._make_client()
+        # All file fetches fail; directory scan returns empty
+        client._lib.IedGetFileBytes.return_value = (b"", 20)
+        client._lib.IedGetFileDirStr.return_value = ("", 0)
+        with pytest.raises(MmsDirectoryError):
+            client.fetch_scl()
+
+    def test_scans_directory_for_icd(self) -> None:
+
+        client = self._make_client()
+        xml = b"<SCL icd/>"
+
+        # All fixed candidates fail
+        def get_bytes(con, name):  # type: ignore[no-untyped-def]
+            if name == "device.icd":
+                return (xml, 0)
+            return (b"", 20)
+
+        client._lib.IedGetFileBytes.side_effect = get_bytes
+        # Directory listing returns device.icd
+        client._lib.IedGetFileDirStr.return_value = ("device.icd\t1024\t0\n", 0)
+        result = client.fetch_scl()
+        assert result == xml

@@ -1682,6 +1682,70 @@ class MmsClient:
                 error_code=error,
             )
 
+    # Candidate SCL filenames in priority order (common IED vendor conventions).
+    _SCL_CANDIDATES: tuple[str, ...] = (
+        "conf.xml.gz",  # ABB REF/RET/REC relays, Siemens SIPROTEC
+        "conf.xml",
+        "ied.icd",
+        "ied.cid",
+        "ied.scd",
+        "config.icd",
+    )
+    # SCL file extensions to look for when scanning the root directory.
+    _SCL_EXTENSIONS: frozenset[str] = frozenset({"icd", "cid", "scd", "iid"})
+
+    def fetch_scl(self) -> bytes:
+        """Download the IED's SCL configuration and return raw XML bytes.
+
+        Tries a fixed list of candidate filenames first, then scans the root
+        file directory for files with ``.icd``, ``.cid``, ``.scd``, or
+        ``.iid`` extensions.  GZip-compressed files (``*.gz``) are
+        decompressed transparently.
+
+        Returns
+        -------
+        bytes
+            Decompressed raw SCL XML bytes (UTF-8 or UTF-16 encoded).
+
+        Raises
+        ------
+        MmsDirectoryError
+            If no SCL file is found on the IED or every download attempt fails.
+        """
+        import gzip as _gzip
+
+        # --- Try fixed candidate filenames first ---
+        for candidate in self._SCL_CANDIDATES:
+            try:
+                data = self.get_file(candidate)
+            except MmsDirectoryError:
+                continue
+            if candidate.endswith(".gz"):
+                try:
+                    data = _gzip.decompress(data)
+                except OSError:
+                    continue  # not actually gzip; skip
+            return data
+
+        # --- Scan root directory for SCL-extension files ---
+        try:
+            entries = self.list_files("")
+        except MmsDirectoryError as exc:
+            raise MmsDirectoryError("No SCL file found on IED", error_code=0) from exc
+
+        for entry in entries:
+            name = entry.name
+            suffix = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if suffix not in self._SCL_EXTENSIONS:
+                continue
+            try:
+                data = self.get_file(name)
+                return data
+            except MmsDirectoryError:
+                continue
+
+        raise MmsDirectoryError("No SCL file found on IED", error_code=0)
+
     # ---------------------------------------------------------------------------
     # Directory services (P8.B.3)
     # ---------------------------------------------------------------------------
