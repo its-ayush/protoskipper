@@ -129,6 +129,10 @@ protoskipper = ["py.typed"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+pythonpath = [
+    "src",
+    "plugins-builtin/protoskipper-iec61850/src",
+]
 markers = [
     "integration: end-to-end tests that exercise real sockets/serial; require pymodbus.",
     "gui: tests that require a running QApplication and PySide6.",

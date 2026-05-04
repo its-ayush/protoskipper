@@ -58,6 +58,7 @@ from protoskipper_iec61850._mms_client import (
     FC_ST,
     TRG_OPS_DATA_CHANGE,
     TRG_OPS_QUALITY_CHANGE,
+    LogEntry,
     MmsClient,
     MmsConnectError,
     MmsDecodedValue,
@@ -513,6 +514,73 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is not None:
             self._client.disable_report(rcb_ref, is_buffered)
+
+    def query_log_by_time(
+        self,
+        log_ref: str,
+        start_ms: int,
+        end_ms: int,
+    ) -> tuple[list[LogEntry], bool]:
+        """Read journal entries from an LCB within a UTC millisecond time range.
+
+        Parameters
+        ----------
+        log_ref:
+            Log object reference, e.g. ``"LD0/LLN0$GeneralLog"``.
+        start_ms:
+            Start of the query range in milliseconds since the Unix epoch
+            (inclusive).
+        end_ms:
+            End of the query range in milliseconds since the Unix epoch
+            (inclusive).
+
+        Returns
+        -------
+        tuple[list[LogEntry], bool]
+            ``(entries, more_follows)``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.query_log_by_time(log_ref, start_ms, end_ms)
+
+    def query_log_after(
+        self,
+        log_ref: str,
+        entry_id: bytes,
+        timestamp_ms: int,
+    ) -> tuple[list[LogEntry], bool]:
+        """Read journal entries after a known entry ID (cursor-based paging).
+
+        Parameters
+        ----------
+        log_ref:
+            Log object reference, e.g. ``"LD0/LLN0$GeneralLog"``.
+        entry_id:
+            The opaque entry ID of the last-received entry (raw bytes).
+        timestamp_ms:
+            The occurrence-time of the last-received entry in milliseconds
+            since the Unix epoch.
+
+        Returns
+        -------
+        tuple[list[LogEntry], bool]
+            ``(entries, more_follows)``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.query_log_after(log_ref, entry_id, timestamp_ms)
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""

@@ -1060,3 +1060,189 @@ class TestSessionReporting:
         device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
         session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
         session.unsubscribe_report("LD0/LLN0.BR.rcb01", True)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# P8.B.7 — Log buffer query
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_journal_entry(lib, entry_id_bytes=b"\x01\x02", occ_ms=1_700_000_000_000):  # type: ignore[no-untyped-def]
+    """Return a mock MmsJournalEntry (as LinkedList data) with known fields."""
+    from unittest.mock import MagicMock
+
+    entry = MagicMock()
+    # occurrence time
+    occ_val = MagicMock()
+    lib.MmsJournalEntry_getOccurenceTime.return_value = occ_val
+    lib.MmsValue_getBinaryTimeAsUtcMs.return_value = occ_ms
+    # entry ID
+    eid_val = MagicMock()
+    eid_buf = bytearray(entry_id_bytes)
+    lib.MmsJournalEntry_getEntryID.return_value = eid_val
+    lib.MmsValue_getOctetStringBuffer.return_value = eid_buf
+    lib.MmsValue_getOctetStringSize.return_value = len(entry_id_bytes)
+    # no journal variables (empty list head → LinkedList_getNext returns None)
+    jvars_ll = MagicMock()
+    lib.MmsJournalEntry_getJournalVariables.return_value = jvars_ll
+    lib.LinkedList_getNext.side_effect = _ll_single_then_none_factory(entry, jvars_ll)
+    lib.LinkedList_getData.return_value = entry
+    return entry
+
+
+def _ll_single_then_none_factory(data_entry, jvars_ll):  # type: ignore[no-untyped-def]
+    """Return a side_effect for LinkedList_getNext that yields one data node then None.
+
+    Outer call sequence (iterating entries_ll):
+      LinkedList_getNext(entries_ll) -> node1
+      LinkedList_getNext(node1) -> None
+    Inner call sequence (iterating jvars_ll):
+      LinkedList_getNext(jvars_ll) -> None  (no variables)
+    """
+    from unittest.mock import MagicMock
+
+    node = MagicMock()
+    node._is_entry_node = True
+    calls = {}
+
+    def _side_effect(ll_or_node):  # type: ignore[no-untyped-def]
+        key = id(ll_or_node)
+        if id(ll_or_node) == id(jvars_ll):
+            return None  # no journal variables
+        count = calls.get(key, 0)
+        calls[key] = count + 1
+        if count == 0:
+            return node  # first call: return the single entry node
+        return None  # subsequent calls: end of list
+
+    return _side_effect
+
+
+class TestMmsClientQueryLogByTime:
+    """MmsClient.query_log_by_time() wraps IedConnection_queryLogByTime."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        # Build a minimal entries linked-list mock
+        entries_ll = object()  # opaque sentinel
+        lib.IedConnection_queryLogByTime.return_value = (entries_ll, 0, False)
+        # LinkedList traversal: no entries (getNext returns None for entries_ll)
+        lib.LinkedList_getNext.return_value = None
+        return client, lib, entries_ll
+
+    def test_returns_empty_list_when_no_entries(self) -> None:
+        client, _lib, _ = self._make_client()
+        entries, more = client.query_log_by_time("LD0/LLN0$GL", 0, 1_000_000)
+        assert entries == []
+        assert more is False
+
+    def test_more_follows_true_propagated(self) -> None:
+        client, lib, entries_ll = self._make_client()
+        lib.IedConnection_queryLogByTime.return_value = (entries_ll, 0, True)
+        _, more = client.query_log_by_time("LD0/LLN0$GL", 0, 1_000_000)
+        assert more is True
+
+    def test_raises_mms_directory_error_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib, entries_ll = self._make_client()
+        lib.IedConnection_queryLogByTime.return_value = (entries_ll, 20, False)
+        lib._ied_error_name = lambda e: str(e)
+        with pytest.raises(MmsDirectoryError):
+            client.query_log_by_time("LD0/LLN0$GL", 0, 1_000_000)
+
+    def test_ll_destroy_called_even_on_success(self) -> None:
+        client, lib, entries_ll = self._make_client()
+        client.query_log_by_time("LD0/LLN0$GL", 0, 1_000_000)
+        lib.LinkedList_destroyDeep.assert_called_once_with(entries_ll, lib.MmsJournalEntry_destroy)
+
+
+class TestMmsClientQueryLogAfter:
+    """MmsClient.query_log_after() wraps IedConnection_queryLogAfter."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        entries_ll = object()
+        lib.IedConnection_queryLogAfter.return_value = (entries_ll, 0, False)
+        lib.LinkedList_getNext.return_value = None
+        # Mock MmsValue creation/deletion for entry ID
+        eid_mv = object()
+        lib.MmsValue_newOctetString.return_value = eid_mv
+        buf = bytearray(4)
+        lib.MmsValue_getOctetStringBuffer.return_value = buf
+        return client, lib, entries_ll, eid_mv
+
+    def test_returns_empty_list_on_no_entries(self) -> None:
+        client, _lib, _, _ = self._make_client()
+        entries, more = client.query_log_after("LD0/LLN0$GL", b"\x01\x02", 0)
+        assert entries == []
+        assert more is False
+
+    def test_entry_id_mms_value_created_and_deleted(self) -> None:
+        client, lib, _, eid_mv = self._make_client()
+        client.query_log_after("LD0/LLN0$GL", b"\xab\xcd", 12345)
+        lib.MmsValue_newOctetString.assert_called_once_with(2, 2)
+        lib.MmsValue_delete.assert_called_once_with(eid_mv)
+
+    def test_raises_mms_directory_error_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib, entries_ll, _ = self._make_client()
+        lib.IedConnection_queryLogAfter.return_value = (entries_ll, 5, False)
+        with pytest.raises(MmsDirectoryError):
+            client.query_log_after("LD0/LLN0$GL", b"\x00", 0)
+
+
+class TestSessionLog:
+    """Iec61850MmsSession.query_log_by_time / query_log_after delegate to MmsClient."""
+
+    @pytest.fixture
+    def session_with_client(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    def test_query_log_by_time_delegates(self, session_with_client) -> None:
+        from protoskipper_iec61850._mms_client import LogEntry
+
+        expected = ([LogEntry(log_ref="LD0/LLN0$GL", entry_id=b"", occurrence_time_ms=0)], False)
+        session_with_client._client.query_log_by_time.return_value = expected
+        result = session_with_client.query_log_by_time("LD0/LLN0$GL", 0, 1000)
+        session_with_client._client.query_log_by_time.assert_called_once_with(
+            "LD0/LLN0$GL", 0, 1000
+        )
+        assert result == expected
+
+    def test_query_log_after_delegates(self, session_with_client) -> None:
+
+        expected = ([], True)
+        session_with_client._client.query_log_after.return_value = expected
+        result = session_with_client.query_log_after("LD0/LLN0$GL", b"\x01", 9999)
+        session_with_client._client.query_log_after.assert_called_once_with(
+            "LD0/LLN0$GL", b"\x01", 9999
+        )
+        assert result == expected
+
+    def test_no_client_raises_mms_directory_error(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
+        with pytest.raises(MmsDirectoryError):
+            session.query_log_by_time("LD0/LLN0$GL", 0, 1000)
+        with pytest.raises(MmsDirectoryError):
+            session.query_log_after("LD0/LLN0$GL", b"\x00", 0)

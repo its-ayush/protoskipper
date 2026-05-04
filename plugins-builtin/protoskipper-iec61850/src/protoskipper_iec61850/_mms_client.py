@@ -353,6 +353,34 @@ class ReportEntry:
     entries: list[tuple[int, Any]] = field(default_factory=list)
 
 
+@dataclass
+class LogEntry:
+    """One decoded journal entry returned by :meth:`MmsClient.query_log_by_time`
+    or :meth:`MmsClient.query_log_after`.
+
+    Attributes
+    ----------
+    log_ref:
+        The log object reference that was queried,
+        e.g. ``"LD0/LLN0$GeneralLog"``.
+    entry_id:
+        Opaque entry identifier as raw bytes (``MMS_OCTET_STRING``).
+    occurrence_time_ms:
+        Journal timestamp in milliseconds since the Unix epoch
+        (decoded from ``MMS_BINARY_TIME``).  0 when not present.
+    variables:
+        List of ``(tag, value)`` pairs decoded from the journal
+        entry's data, where *tag* is the MMS variable tag string and
+        *value* is the decoded Python value (same types as
+        :attr:`MmsDecodedValue.value`).
+    """
+
+    log_ref: str
+    entry_id: bytes
+    occurrence_time_ms: int
+    variables: list[tuple[str, Any]] = field(default_factory=list)
+
+
 def _mms_value_to_python(lib: Any, val: Any) -> Any:
     """Recursively convert a pyiec61850 ``MmsValue`` to a Python object.
 
@@ -1165,6 +1193,182 @@ class MmsClient:
     # file applies ``%apply IedClientError *OUTPUT { IedClientError* error }``.
     # The LinkedList is then converted to a plain ``list[str]`` by
     # ``_ll_to_list`` which also frees the list.
+
+    # ---------------------------------------------------------------------------
+    # Log services (P8.B.7)
+    # ---------------------------------------------------------------------------
+
+    def _decode_journal_entries(
+        self,
+        lib: Any,
+        entries_ll: Any,
+        log_ref: str,
+    ) -> list[LogEntry]:
+        """Decode a pyiec61850 ``LinkedList<MmsJournalEntry>`` to :class:`LogEntry`.
+
+        Ownership of *entries_ll* is transferred: this method frees each
+        ``MmsJournalEntry`` node after decoding and destroys the list.
+        """
+        result: list[LogEntry] = []
+        if entries_ll is None:
+            return result
+        try:
+            node = lib.LinkedList_getNext(entries_ll)
+            while node is not None:
+                entry = lib.LinkedList_getData(node)
+                # --- occurrence time (MMS_BINARY_TIME) ---
+                occ_val = lib.MmsJournalEntry_getOccurenceTime(entry)
+                try:
+                    occ_ms: int = (
+                        lib.MmsValue_getBinaryTimeAsUtcMs(occ_val) if occ_val is not None else 0
+                    )
+                except Exception:
+                    occ_ms = 0
+                # --- entry ID (MMS_OCTET_STRING) ---
+                eid_val = lib.MmsJournalEntry_getEntryID(entry)
+                try:
+                    if eid_val is not None:
+                        buf = lib.MmsValue_getOctetStringBuffer(eid_val)
+                        size = lib.MmsValue_getOctetStringSize(eid_val)
+                        entry_id: bytes = bytes(buf[:size]) if buf is not None else b""
+                    else:
+                        entry_id = b""
+                except Exception:
+                    entry_id = b""
+                # --- journal variables ---
+                variables: list[tuple[str, Any]] = []
+                jvars_ll = lib.MmsJournalEntry_getJournalVariables(entry)
+                if jvars_ll is not None:
+                    jv_node = lib.LinkedList_getNext(jvars_ll)
+                    while jv_node is not None:
+                        jv = lib.LinkedList_getData(jv_node)
+                        tag = lib.MmsJournalVariable_getTag(jv) or ""
+                        raw_val = lib.MmsJournalVariable_getValue(jv)
+                        variables.append((tag, _mms_value_to_python(lib, raw_val)))
+                        jv_node = lib.LinkedList_getNext(jv_node)
+                result.append(
+                    LogEntry(
+                        log_ref=log_ref,
+                        entry_id=entry_id,
+                        occurrence_time_ms=occ_ms,
+                        variables=variables,
+                    )
+                )
+                node = lib.LinkedList_getNext(node)
+        finally:
+            # Destroy the list and all contained MmsJournalEntry objects.
+            lib.LinkedList_destroyDeep(entries_ll, lib.MmsJournalEntry_destroy)
+        return result
+
+    def query_log_by_time(
+        self,
+        log_ref: str,
+        start_ms: int,
+        end_ms: int,
+    ) -> tuple[list[LogEntry], bool]:
+        """Read journal entries in a UTC millisecond time range.
+
+        Implements the IEC 61850-7-2 *QueryLogByTime* ACSI service via
+        ``IedConnection_queryLogByTime``.
+
+        Parameters
+        ----------
+        log_ref:
+            Log object reference in the form ``"<LD>/<LN>$<LogName>"``,
+            e.g. ``"LD0/LLN0$GeneralLog"``.
+        start_ms:
+            Start of the query range in milliseconds since the Unix epoch
+            (inclusive).
+        end_ms:
+            End of the query range in milliseconds since the Unix epoch
+            (inclusive).
+
+        Returns
+        -------
+        tuple[list[LogEntry], bool]
+            ``(entries, more_follows)`` where *more_follows* is ``True``
+            when the IED has additional entries beyond the range that fit
+            in a single MMS PDU.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        # SWIG OUTPUT typemap pattern:
+        # IedConnection_queryLogByTime(con, logRef, start, end)
+        # → (LinkedList<MmsJournalEntry>, IedClientError, bool moreFollows)
+        entries_ll, error, more_follows = lib.IedConnection_queryLogByTime(
+            self._con,
+            log_ref,
+            start_ms,
+            end_ms,
+        )
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"QueryLogByTime({log_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return self._decode_journal_entries(lib, entries_ll, log_ref), bool(more_follows)
+
+    def query_log_after(
+        self,
+        log_ref: str,
+        entry_id: bytes,
+        timestamp_ms: int,
+    ) -> tuple[list[LogEntry], bool]:
+        """Read journal entries after a known entry ID.
+
+        Implements the IEC 61850-7-2 *QueryLogAfterEntry* ACSI service via
+        ``IedConnection_queryLogAfter``.
+
+        Parameters
+        ----------
+        log_ref:
+            Log object reference, e.g. ``"LD0/LLN0$GeneralLog"``.
+        entry_id:
+            The opaque entry ID of the last-received entry, as raw bytes
+            (``MMS_OCTET_STRING``).
+        timestamp_ms:
+            The occurrence-time of the last-received entry in milliseconds
+            since the Unix epoch.
+
+        Returns
+        -------
+        tuple[list[LogEntry], bool]
+            ``(entries, more_follows)``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        # Build a MMS_OCTET_STRING MmsValue for the entry ID.
+        eid_mv = lib.MmsValue_newOctetString(len(entry_id), len(entry_id))
+        try:
+            buf = lib.MmsValue_getOctetStringBuffer(eid_mv)
+            for i, b in enumerate(entry_id):
+                buf[i] = b
+            entries_ll, error, more_follows = lib.IedConnection_queryLogAfter(
+                self._con,
+                log_ref,
+                eid_mv,
+                timestamp_ms,
+            )
+        finally:
+            lib.MmsValue_delete(eid_mv)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"QueryLogAfter({log_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return self._decode_journal_entries(lib, entries_ll, log_ref), bool(more_follows)
+
+    # ---------------------------------------------------------------------------
+    # Directory services (P8.B.3)
+    # ---------------------------------------------------------------------------
 
     def get_server_directory(self) -> list[str]:
         """Return logical-device names reported by GetServerDirectory.
