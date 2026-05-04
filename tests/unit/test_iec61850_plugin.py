@@ -649,7 +649,7 @@ class TestRead:
         session._client.read_do_with_meta.assert_not_called()
 
     def test_da_explicit_fc_error_returns_bad(self, session) -> None:
-        """MmsDirectoryError on a DA-level read -> BAD quality, no exception."""
+        """MmsDirectoryError on both DA and DO reads -> BAD quality, no error text."""
         from protoskipper_iec61850._mms_client import MmsDirectoryError
 
         from protoskipper.core.driver import ObjectRef, Quality
@@ -659,10 +659,37 @@ class TestRead:
             object_id="LD0/MMXU1.A.phsA.cVal.mag.f[ST]",
             data_type="float32",
         )
-        session._client.read_object.side_effect = MmsDirectoryError("access denied", error_code=11)
+        err = MmsDirectoryError("access denied", error_code=11)
+        session._client.read_object.side_effect = err
+        session._client.read_do_with_meta.side_effect = err
         result = session.read(ref)
         assert result.quality == Quality.BAD
-        assert result.error is not None
+        # Error text is intentionally suppressed so the UI shows blank+BAD
+        # icon rather than a noisy "ERR: ..." message.
+        assert result.error is None
+
+    def test_da_explicit_fc_falls_back_to_do_read(self, session) -> None:
+        """DA-level read fails but parent DO read succeeds -> value from DO."""
+
+        from protoskipper_iec61850._mms_client import MmsDecodedValue, MmsDirectoryError
+
+        from protoskipper.core.driver import ObjectRef, Quality
+
+        ref = ObjectRef(
+            device=session.device,
+            object_id="LD0/MMXU1.A.phsA.cVal.mag.f[MX]",
+            data_type="float32",
+        )
+        session._client.read_object.side_effect = MmsDirectoryError(
+            "DATA_ACCESS_ERROR", error_code=11
+        )
+        do_decoded = MmsDecodedValue(value=42.0, quality_validity=0)
+        session._client.read_do_with_meta.return_value = do_decoded
+        result = session.read(ref)
+        assert result.quality == Quality.GOOD
+        assert result.value == 42.0
+        # Fell back to the parent DO ("LD0/MMXU1.A"), not the DA path.
+        session._client.read_do_with_meta.assert_called_once_with("LD0/MMXU1.A", 1)  # FC_MX=1
 
 
 # ---------------------------------------------------------------------------
