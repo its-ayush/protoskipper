@@ -8,8 +8,8 @@ logger at panel construction time and removed when the panel is destroyed.
 Design constraints
 ------------------
 * No protocol-specific imports; depends only on stdlib and PySide6.
-* The logging handler posts a signal-safe call to the GUI thread via
-  ``QMetaObject.invokeMethod`` so it is safe to use from worker threads.
+* The logging handler uses ``QTimer.singleShot`` to post calls to the GUI
+  thread, making it safe to invoke from any worker thread.
 * Maximum line count is capped at 5 000 to avoid unbounded memory growth.
 """
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QTimer, Slot
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -61,17 +61,15 @@ class _QtLogHandler(logging.Handler):
             level = record.levelno
         except Exception:
             return
-        # Emitting a Signal from any thread to a QueuedConnection slot is
-        # thread-safe in Qt.  This is the correct PySide6 cross-thread pattern.
-        self._panel._log_received.emit(msg, level)
+        # QTimer.singleShot with a QObject context schedules the callable on
+        # the context's thread (the GUI thread), making this safe to call from
+        # any logging thread including DriverWorker threads.
+        panel = self._panel
+        QTimer.singleShot(0, panel, lambda m=msg, lv=level: panel._append(m, lv))
 
 
 class LogPanel(QWidget):
     """Bottom-dock panel that streams live application log records."""
-
-    # Thread-safe bridge: any thread can emit this; _append always runs on
-    # the GUI thread because it is connected with QueuedConnection.
-    _log_received: Signal = Signal(str, int)  # msg, levelno
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -79,10 +77,6 @@ class LogPanel(QWidget):
         self._min_level: int = logging.DEBUG
 
         self._build_ui()
-
-        # Connect bridge signal → _append with QueuedConnection so worker-thread
-        # emits are marshalled to the GUI event loop automatically.
-        self._log_received.connect(self._append, Qt.ConnectionType.QueuedConnection)
 
         self._handler = _QtLogHandler(self)
         self._handler.setLevel(logging.DEBUG)

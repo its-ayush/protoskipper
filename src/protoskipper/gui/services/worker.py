@@ -187,6 +187,13 @@ class DriverWorker(QObject):
             self.error_raised.emit("enumerate", str(exc))
             return
         self.objects_enumerated.emit(objects)
+        # For IEC 61850 (and any future protocol with get_tag_model): also emit
+        # scl_tags_ready so the device tree and IEC 61850 browser build their
+        # LD→LN→DO hierarchy immediately without requiring a manual "Fetch SCL
+        # Tags" button click.  The fetch_scl_tags slot remains available as a
+        # manual refresh trigger if the IED's data model changes at runtime.
+        if objects and hasattr(self._session.driver_session, "get_tag_model"):
+            self.scl_tags_ready.emit(objects)
 
     @Slot(object)
     def read(self, ref: ObjectRef) -> None:

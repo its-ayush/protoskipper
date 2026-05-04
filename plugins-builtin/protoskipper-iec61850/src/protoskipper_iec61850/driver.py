@@ -212,31 +212,6 @@ def _parse_object_id_fc(object_id: str) -> tuple[str, int | None]:
     return object_id, None
 
 
-def _strip_to_do(da_ref: str) -> str:
-    """Strip a DA attribute path down to the enclosing DO level.
-
-    Many IEDs do not support individual DA-level reads but do support DO-level
-    reads.  This helper converts ``"LD0/MMXU1.A.phsA.cVal.mag.f"`` to
-    ``"LD0/MMXU1.A"`` (the DO), which the driver can then fall back to.
-
-    Returns *da_ref* unchanged if it is already at the DO level (i.e. there
-    is only one ``.`` after the ``/``).
-    """
-    try:
-        slash = da_ref.index("/")
-        after_slash = da_ref[slash + 1 :]  # e.g. "MMXU1.A.phsA"
-        first_dot = after_slash.index(".")  # between LN prefix and DO name
-        rest = after_slash[first_dot + 1 :]  # e.g. "A.phsA"
-        second_dot_in_rest = rest.find(".")  # -1 when already at DO level
-        if second_dot_in_rest < 0:
-            return da_ref  # already at DO level — e.g. "LD0/MMXU1.A"
-        # Keep through the DO name only.
-        do_end = slash + 1 + first_dot + 1 + second_dot_in_rest
-        return da_ref[:do_end]
-    except ValueError:
-        return da_ref
-
-
 def _quality_from_decoded(decoded: MmsDecodedValue) -> Quality:
     """Map an :class:`MmsDecodedValue` quality fields to :class:`Quality`."""
     if decoded.is_substituted:
@@ -480,29 +455,13 @@ class Iec61850MmsSession(DriverSession):
             # DA-level read: single call, no q/t extraction.
             try:
                 decoded = self._client.read_object(clean_id, explicit_fc)
-            except MmsDirectoryError:
-                # Individual DA-level read was rejected (DATA_ACCESS_ERROR or
-                # other IED-side error).  Many IEDs support only DO-level reads;
-                # strip back to LDInst/LNRef.DOName and retry as a DO read.
-                do_ref = _strip_to_do(clean_id)
-                if do_ref != clean_id:
-                    try:
-                        do_dec = self._client.read_do_with_meta(do_ref, explicit_fc)
-                        return ReadResult(
-                            object_ref=ref,
-                            value=do_dec.value,
-                            quality=_quality_from_decoded(do_dec),
-                            timestamp=_ts_from_ms(do_dec.timestamp_ms),
-                        )
-                    except MmsDirectoryError:
-                        pass
-                # Both DA and DO reads failed; return empty without error text
-                # so the cell shows blank+BAD rather than a noisy ERR message.
+            except MmsDirectoryError as exc:
                 return ReadResult(
                     object_ref=ref,
                     value=None,
                     quality=Quality.BAD,
                     timestamp=datetime.now(tz=timezone.utc),
+                    error=str(exc),
                 )
             return ReadResult(
                 object_ref=ref,

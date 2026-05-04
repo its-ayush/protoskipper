@@ -648,8 +648,8 @@ class TestRead:
         session._client.read_object.assert_called_once_with("LD0/MMXU1.A.phsA.cVal.mag.f", FC_MX)
         session._client.read_do_with_meta.assert_not_called()
 
-    def test_da_explicit_fc_error_returns_bad(self, session) -> None:
-        """MmsDirectoryError on both DA and DO reads -> BAD quality, no error text."""
+    def test_da_explicit_fc_error_returns_bad_with_message(self, session) -> None:
+        """Real MmsDirectoryError on a DA read -> BAD quality + error text shown."""
         from protoskipper_iec61850._mms_client import MmsDirectoryError
 
         from protoskipper.core.driver import ObjectRef, Quality
@@ -659,37 +659,33 @@ class TestRead:
             object_id="LD0/MMXU1.A.phsA.cVal.mag.f[ST]",
             data_type="float32",
         )
-        err = MmsDirectoryError("access denied", error_code=11)
-        session._client.read_object.side_effect = err
-        session._client.read_do_with_meta.side_effect = err
+        session._client.read_object.side_effect = MmsDirectoryError(
+            "IED_ERROR_TIMEOUT", error_code=14
+        )
         result = session.read(ref)
         assert result.quality == Quality.BAD
-        # Error text is intentionally suppressed so the UI shows blank+BAD
-        # icon rather than a noisy "ERR: ..." message.
-        assert result.error is None
+        # Real IED errors (connection issues, timeouts) DO show error text so
+        # the operator can see what went wrong.
+        assert result.error is not None
 
-    def test_da_explicit_fc_falls_back_to_do_read(self, session) -> None:
-        """DA-level read fails but parent DO read succeeds -> value from DO."""
-
-        from protoskipper_iec61850._mms_client import MmsDecodedValue, MmsDirectoryError
+    def test_da_data_access_error_returns_blank_unknown(self, session) -> None:
+        """DATA_ACCESS_ERROR embedded in ReadResponse -> blank value, UNKNOWN quality."""
+        from protoskipper_iec61850._mms_client import MmsDecodedValue
 
         from protoskipper.core.driver import ObjectRef, Quality
 
         ref = ObjectRef(
             device=session.device,
-            object_id="LD0/MMXU1.A.phsA.cVal.mag.f[MX]",
-            data_type="float32",
+            object_id="LD0/MMXU1.Mod.stVal[ST]",
+            data_type="string",
         )
-        session._client.read_object.side_effect = MmsDirectoryError(
-            "DATA_ACCESS_ERROR", error_code=11
-        )
-        do_decoded = MmsDecodedValue(value=42.0, quality_validity=0)
-        session._client.read_do_with_meta.return_value = do_decoded
+        # read_object returns value=None without raising (DATA_ACCESS_ERROR path)
+        session._client.read_object.return_value = MmsDecodedValue(value=None)
         result = session.read(ref)
-        assert result.quality == Quality.GOOD
-        assert result.value == 42.0
-        # Fell back to the parent DO ("LD0/MMXU1.A"), not the DA path.
-        session._client.read_do_with_meta.assert_called_once_with("LD0/MMXU1.A", 1)  # FC_MX=1
+        assert result.quality == Quality.UNKNOWN
+        assert result.value is None
+        assert result.error is None
+        session._client.read_do_with_meta.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -895,13 +895,14 @@ class MmsClient:
             )
         try:
             # An IED may embed DATA_ACCESS_ERROR (type 15) inside a
-            # successful ReadResponse.  Treat it the same as an explicit
-            # IED error so callers see a MmsDirectoryError, not None.
+            # successful ReadResponse.  Return value=None so the caller
+            # treats the attribute as "not accessible" (shows a blank cell
+            # with UNKNOWN quality) rather than a connection-level error.
+            # Raising MmsDirectoryError here was too aggressive: it also
+            # blocked DO-level reads that the same IED supports, and it
+            # surfaced as noisy "ERR:" text in the value column.
             if lib.MmsValue_getType(mms_val) == _MMS_DATA_ACCESS_ERROR:
-                raise MmsDirectoryError(
-                    f"ReadObject({object_ref!r}, FC={fc}) returned DATA_ACCESS_ERROR",
-                    error_code=lib.IED_ERROR_OK,
-                )
+                return MmsDecodedValue(value=None)
             python_val = _mms_value_to_python(lib, mms_val)
         finally:
             if mms_val is not None:

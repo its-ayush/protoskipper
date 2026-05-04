@@ -16,10 +16,14 @@ from collections.abc import Sequence
 
 
 def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    # Root logger at DEBUG so the GUI log panel can receive all levels.
+    # The console StreamHandler is capped at INFO to avoid flooding stderr.
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    root.addHandler(handler)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
