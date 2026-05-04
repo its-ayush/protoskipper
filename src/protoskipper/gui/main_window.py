@@ -741,13 +741,33 @@ class MainWindow(QMainWindow):
     # ---- panel selection forwarding --------------------------------------
 
     def _on_session_selected(self, session_id: str) -> None:
-        self._object_browser.set_session(session_id)
+        info = self._state.session(SessionId(session_id))
+        proto = info.device.protocol if info else ""
+        is_iec61850 = proto.startswith("iec61850")
+        is_iec104 = proto.startswith("iec104")
+
+        # Route the session to the correct panel and skip irrelevant ones.
         self._packet_view.set_session(session_id)
         self._soe_panel.set_session(session_id)
+
+        if is_iec61850:
+            # Object Browser has no concept of MMS data attributes; don't
+            # hand off the session so it shows a clean "no session" state.
+            self._object_browser.set_session(None)
+            self._iec61850_browser.set_session(session_id)
+            self._tabs.setCurrentWidget(self._iec61850_browser)
+        else:
+            self._object_browser.set_session(session_id)
+            self._iec61850_browser.set_session(None)
+            if not is_iec104:
+                self._tabs.setCurrentWidget(self._object_browser)
+
+        # IEC 104-specific panels.
         self._interrogation_panel.set_session(session_id)
         self._timesync_panel.set_session(session_id)
-        self._iec61850_browser.set_session(session_id)
-        info = self._state.session(SessionId(session_id))
+        if is_iec104:
+            self._tabs.setCurrentWidget(self._interrogation_panel)
+
         is_open = info is not None and info.is_open
         self._action_disconnect.setEnabled(is_open)
         self._action_close_session.setEnabled(is_open)

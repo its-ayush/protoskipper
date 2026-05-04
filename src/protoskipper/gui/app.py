@@ -9,6 +9,7 @@ where it can be tested without driving a Qt loop.
 
 from __future__ import annotations
 
+import faulthandler
 import logging
 import sys
 from collections.abc import Sequence
@@ -23,6 +24,11 @@ def _configure_logging() -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the ProtoSkipper desktop application."""
+    # Enable the built-in fault handler so that any SIGSEGV/SIGFPE in C
+    # extensions (e.g. libiec61850) prints a Python + C traceback to stderr
+    # instead of just dying silently.  This is cheap (no-op in prod) and
+    # gives us the exact call site on the next crash.
+    faulthandler.enable()
     _configure_logging()
 
     try:

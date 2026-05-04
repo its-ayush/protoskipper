@@ -56,9 +56,19 @@ from protoskipper.core.errors import ConnectionFailure, EncodingError
 
 from protoskipper_iec61850._mms_client import (
     ACSI_CLASS_DATA_OBJECT,
+    FC_BL,
+    FC_CF,
+    FC_CO,
+    FC_DC,
+    FC_EX,
     FC_MX,
+    FC_OR,
+    FC_SE,
+    FC_SG,
     FC_SP,
+    FC_SR,
     FC_ST,
+    FC_SV,
     TRG_OPS_DATA_CHANGE,
     TRG_OPS_QUALITY_CHANGE,
     FileInfo,
@@ -170,11 +180,21 @@ def _host_port_from_address(address: str) -> tuple[str, int]:
 # FC suffix pattern: "[MX]", "[ST]", "[SP]", etc.
 _FC_SUFFIX_RE = re.compile(r"\[(?P<fc>[A-Z]{2,3})\]$")
 
-# Map FC string names to integer FC codes
+# Map FC string names to integer FC codes (all IEC 61850-7-2 FCs).
 _FC_NAME_TO_INT: dict[str, int] = {
-    "ST": FC_ST,
-    "MX": FC_MX,
-    "SP": FC_SP,
+    "ST": FC_ST,  # Status
+    "MX": FC_MX,  # Measured value
+    "SP": FC_SP,  # Setting (persistent)
+    "SV": FC_SV,  # Substitution value
+    "CF": FC_CF,  # Configuration
+    "DC": FC_DC,  # Description
+    "SG": FC_SG,  # Setting group (active)
+    "SE": FC_SE,  # Setting group (editable)
+    "SR": FC_SR,  # Service response
+    "OR": FC_OR,  # Operate received
+    "BL": FC_BL,  # Blocking
+    "EX": FC_EX,  # Extended definition
+    "CO": FC_CO,  # Control output
 }
 
 

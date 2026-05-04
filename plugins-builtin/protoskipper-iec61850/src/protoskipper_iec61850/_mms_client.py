@@ -441,14 +441,33 @@ def _mms_value_to_python(lib: Any, val: Any) -> Any:
     if typ == _MMS_FLOAT:
         return float(lib.MmsValue_toFloat(val))
     if typ in (_MMS_VISIBLE_STRING, _MMS_STRING):
-        return str(lib.MmsValue_toString(val))
+        s = lib.MmsValue_toString(val)
+        return str(s) if s is not None else ""
     if typ == _MMS_BIT_STRING:
         return int(lib.MmsValue_getBitStringAsInteger(val))
     if typ == _MMS_UTC_TIME:
         return int(lib.MmsValue_getUtcTimeInMs(val))
+    if typ == _MMS_OCTET_STRING:
+        # Return as hex string; OctetString is uncommon in DA reads.
+        n = lib.MmsValue_getOctetStringSize(val)
+        buf = lib.MmsValue_getOctetStringBuffer(val)
+        if buf is None or n <= 0:
+            return ""
+        # SWIG returns a bytes-like object or a wrapped char* — best-effort.
+        try:
+            return bytes(buf[:n]).hex()
+        except Exception:
+            return ""
     if typ in (_MMS_ARRAY, _MMS_STRUCTURE):
         n = lib.MmsValue_getArraySize(val)
+        # Safety: libiec61850 must not return a nonsensical size.
+        # An unreasonable count indicates memory corruption — return None
+        # rather than iterating into invalid memory and segfaulting.
+        if n < 0 or n > 2048:
+            _log.warning("MmsValue array/structure size %d out of expected range; skipping", n)
+            return None
         return [_mms_value_to_python(lib, lib.MmsValue_getElement(val, i)) for i in range(n)]
+    # MMS_DATA_ACCESS_ERROR (15) or any future type: signal the absence of a value.
     _log.debug("Unrecognised MmsType %d; returning None", typ)
     return None
 
