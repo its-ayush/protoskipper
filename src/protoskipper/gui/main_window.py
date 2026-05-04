@@ -460,6 +460,7 @@ class MainWindow(QMainWindow):
         self._device_tree = DeviceTreePanel(self._state, self._session_manager, self)
         self._device_tree.session_selected.connect(self._on_session_selected)
         self._device_tree.object_selected.connect(self._on_object_selected_in_tree)
+        self._device_tree.iec_group_selected.connect(self._on_iec_group_selected)
         self._device_tree.write_requested.connect(self._open_write_dialog)
         self._device_tree.add_to_watchlist_requested.connect(self._add_to_watchlist)
         self._device_tree.disconnect_requested.connect(self._disconnect_session)
@@ -780,6 +781,15 @@ class MainWindow(QMainWindow):
         # The tree panel selected a specific object; switch to the
         # object-browser tab so the operator sees it highlighted.
         self._tabs.setCurrentWidget(self._object_browser)
+
+    def _on_iec_group_selected(self, _session_id: str, group: object) -> None:
+        """User clicked an LD/LN/DO node in the Devices panel."""
+        from protoskipper.gui.models.device_tree_model import IecGroupInfo
+
+        if not isinstance(group, IecGroupInfo):
+            return
+        self._tabs.setCurrentWidget(self._iec61850_browser)
+        self._iec61850_browser.filter_by_group(group.ld_inst, group.ln_ref, group.do_name)
 
     # ---- P0.D.1 audit row counter ---------------------------------------
 

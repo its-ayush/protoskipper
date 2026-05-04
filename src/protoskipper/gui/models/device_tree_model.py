@@ -41,6 +41,31 @@ KIND_PROTOCOL = "protocol"
 KIND_DEVICE = "device"
 KIND_SESSION = "session"
 KIND_OBJECT = "object"
+# IEC 61850: intermediate group nodes (LD, LN, DO) in the device tree.
+# Payload is an IecGroupInfo; no individual leaf tags are inserted.
+KIND_IEC_GROUP = "iec_group"
+
+
+@dataclass
+class IecGroupInfo:
+    """Payload for KIND_IEC_GROUP tree nodes.
+
+    Carries enough context for the IEC 61850 Browser panel to filter its
+    table when the user clicks on a group node.
+    """
+
+    session_id: str
+    ld_inst: str = ""
+    ln_ref: str = ""
+    do_name: str = ""
+
+    @property
+    def level(self) -> str:  # "ld" | "ln" | "do"
+        if self.do_name:
+            return "do"
+        if self.ln_ref:
+            return "ln"
+        return "ld"
 
 
 @dataclass
@@ -91,6 +116,7 @@ class DeviceTreeModel(QAbstractItemModel):
         s.session_opened.connect(self._on_session_opened)
         s.session_closed.connect(self._on_session_closed)
         s.objects_enumerated.connect(self._on_objects_enumerated)
+        s.iec_tags_loaded.connect(self._on_iec_tags_loaded)
 
     # ---- signal handlers --------------------------------------------------
 
@@ -146,6 +172,12 @@ class DeviceTreeModel(QAbstractItemModel):
         self.dataChanged.emit(idx, idx, [Qt.DisplayRole, Qt.FontRole])
 
     def _on_objects_enumerated(self, session_id: str, objects: list[ObjectRef]) -> None:
+        # IEC 61850 objects are handled separately via _on_iec_tags_loaded;
+        # skip them here so they are not dumped as a flat list.
+        info = self._state.session(SessionId(session_id))
+        if info and info.device.protocol.startswith("iec61850"):
+            return
+
         node = self._session_nodes.get(SessionId(session_id))
         if node is None:
             return
@@ -166,6 +198,74 @@ class DeviceTreeModel(QAbstractItemModel):
                 )
                 node.children.append(child)
             self.endInsertRows()
+
+    def _on_iec_tags_loaded(self, session_id: str, objects: list[ObjectRef]) -> None:
+        """Insert LD→LN→DO group nodes for an IEC 61850 session."""
+        node = self._session_nodes.get(SessionId(session_id))
+        if node is None:
+            return
+        parent_index = self._index_of(node)
+        if node.children:
+            self.beginRemoveRows(parent_index, 0, len(node.children) - 1)
+            node.children.clear()
+            self.endRemoveRows()
+        if not objects:
+            return
+
+        # Build LD→LN→DO hierarchy from metadata.
+        # Use ordered dicts to preserve SCL order.
+        from collections import OrderedDict
+
+        ld_map: dict[str, dict[str, set[str]]] = OrderedDict()
+        for obj in objects:
+            m = obj.metadata
+            ld = str(m.get("ld_inst", ""))
+            ln = str(m.get("ln_ref", ""))
+            do = str(m.get("do_name", ""))
+            if ld not in ld_map:
+                ld_map[ld] = OrderedDict()
+            if ln not in ld_map[ld]:
+                ld_map[ld][ln] = set()
+            if do:
+                ld_map[ld][ln].add(do)
+
+        ld_nodes_to_insert = len(ld_map)
+        if ld_nodes_to_insert == 0:
+            return
+        self.beginInsertRows(parent_index, 0, ld_nodes_to_insert - 1)
+        for ld_name, ln_map in ld_map.items():
+            ld_group = IecGroupInfo(session_id=session_id, ld_inst=ld_name)
+            ld_node = _Node(
+                kind=KIND_IEC_GROUP,
+                payload=ld_group,
+                label=ld_name,
+                parent=node,
+            )
+            node.children.append(ld_node)
+            for ln_name, dos in ln_map.items():
+                ln_group = IecGroupInfo(session_id=session_id, ld_inst=ld_name, ln_ref=ln_name)
+                ln_node = _Node(
+                    kind=KIND_IEC_GROUP,
+                    payload=ln_group,
+                    label=ln_name,
+                    parent=ld_node,
+                )
+                ld_node.children.append(ln_node)
+                for do_name in sorted(dos):
+                    do_group = IecGroupInfo(
+                        session_id=session_id,
+                        ld_inst=ld_name,
+                        ln_ref=ln_name,
+                        do_name=do_name,
+                    )
+                    do_node = _Node(
+                        kind=KIND_IEC_GROUP,
+                        payload=do_group,
+                        label=do_name,
+                        parent=ln_node,
+                    )
+                    ln_node.children.append(do_node)
+        self.endInsertRows()
 
     # ---- QAbstractItemModel API ------------------------------------------
 
@@ -237,6 +337,13 @@ class DeviceTreeModel(QAbstractItemModel):
                     f"Type: {obj.data_type}, Access: {obj.access.value}\n"
                     f"Unit: {obj.unit or '(none)'}"
                 )
+            if node.kind == KIND_IEC_GROUP:
+                g = node.payload
+                if g.do_name:
+                    return f"DO: {g.ld_inst}/{g.ln_ref}.{g.do_name}"
+                if g.ln_ref:
+                    return f"Logical Node: {g.ld_inst}/{g.ln_ref}"
+                return f"Logical Device: {g.ld_inst}"
         return None
 
     def headerData(

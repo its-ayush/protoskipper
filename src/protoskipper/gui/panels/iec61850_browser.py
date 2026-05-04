@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
+    QTreeWidgetItemIterator,
     QVBoxLayout,
     QWidget,
 )
@@ -349,6 +350,23 @@ class Iec61850BrowserPanel(QWidget):
         else:
             self._status_label.setText('Click "Fetch SCL Tags" to download the IED configuration.')
 
+    def filter_by_group(self, ld_inst: str, ln_ref: str = "", do_name: str = "") -> None:
+        """Filter the table to the LD/LN/DO group selected in the device tree.
+
+        Called by MainWindow when the user clicks a KIND_IEC_GROUP node.
+        Selects the matching tree node so the internal tree is also in sync,
+        and scrolls the table to the top.
+        """
+        node_data: dict[str, str] = {"ld_inst": ld_inst}
+        if ln_ref:
+            node_data["ln_ref"] = ln_ref
+        if do_name:
+            node_data["do_name"] = do_name
+        self._filter_table(node_data)
+        # Sync the left-hand tree widget to match the requested group.
+        self._select_tree_node(ld_inst, ln_ref, do_name)
+        self._table_view.scrollToTop()
+
     # ---- slots ----------------------------------------------------------
 
     def _on_session_closed(self, session_id: str) -> None:
@@ -500,6 +518,23 @@ class Iec61850BrowserPanel(QWidget):
                         Qt.ItemDataRole.UserRole,
                         {"ld_inst": ld_name, "ln_ref": ln_name, "do_name": do_name},
                     )
+
+    def _select_tree_node(self, ld_inst: str, ln_ref: str, do_name: str) -> None:
+        """Programmatically select the matching tree node without triggering a filter loop."""
+        it = QTreeWidgetItemIterator(self._tree)
+        while it.value():
+            item = it.value()
+            d = item.data(0, Qt.ItemDataRole.UserRole) or {}
+            if (
+                d.get("ld_inst") == ld_inst
+                and d.get("ln_ref", "") == ln_ref
+                and d.get("do_name", "") == do_name
+            ):
+                self._tree.blockSignals(True)
+                self._tree.setCurrentItem(item)
+                self._tree.blockSignals(False)
+                break
+            it += 1
 
     def _filter_table(self, node_data: dict[str, str] | None) -> None:
         """Filter the table to refs matching the tree node selection."""

@@ -28,11 +28,13 @@ from protoskipper.core.driver import ObjectRef
 from protoskipper.core.errors import EncodingError
 from protoskipper.gui.models.device_tree_model import (
     KIND_DEVICE,
+    KIND_IEC_GROUP,
     KIND_OBJECT,
     KIND_SESSION,
     ROLE_NODE_KIND,
     ROLE_PAYLOAD,
     DeviceTreeModel,
+    IecGroupInfo,
 )
 from protoskipper.gui.services.app_state import ApplicationState, SessionInfo
 from protoskipper.gui.services.session_manager import SessionManager
@@ -44,6 +46,9 @@ class DeviceTreePanel(QWidget):
 
     session_selected = Signal(str)  # SessionId
     object_selected = Signal(str, object)  # SessionId, ObjectRef
+    # Emitted when the user clicks an IEC 61850 group node (LD/LN/DO).
+    # The browser panel uses this to filter its table.
+    iec_group_selected = Signal(str, object)  # SessionId, IecGroupInfo
     write_requested = Signal(str, object)  # SessionId, ObjectRef
     add_to_watchlist_requested = Signal(str, object)  # SessionId, ObjectRef
     disconnect_requested = Signal(str)  # SessionId
@@ -93,6 +98,13 @@ class DeviceTreePanel(QWidget):
         payload = self._model.data(current, ROLE_PAYLOAD)
         if kind == KIND_SESSION and isinstance(payload, SessionInfo):
             self.session_selected.emit(payload.session_id)
+        elif kind == KIND_IEC_GROUP and isinstance(payload, IecGroupInfo):
+            # Find ancestor session node to emit session_selected as well,
+            # so the main window routes correctly before we filter.
+            session_info = self._find_session_for_iec_group(current)
+            if session_info is not None:
+                self.session_selected.emit(session_info.session_id)
+            self.iec_group_selected.emit(payload.session_id, payload)
         elif kind == KIND_OBJECT and isinstance(payload, ObjectRef):
             session_info = self._find_session_for_object(current)
             if session_info is not None:
@@ -106,6 +118,16 @@ class DeviceTreePanel(QWidget):
         payload = self._model.data(parent, ROLE_PAYLOAD)
         if isinstance(payload, SessionInfo):
             return payload
+        return None
+
+    def _find_session_for_iec_group(self, index) -> SessionInfo | None:
+        """Walk up ancestors until we find a KIND_SESSION node."""
+        cur = index.parent()
+        while cur.isValid():
+            payload = self._model.data(cur, ROLE_PAYLOAD)
+            if isinstance(payload, SessionInfo):
+                return payload
+            cur = cur.parent()
         return None
 
     # ---- context menu ----------------------------------------------------
@@ -150,6 +172,13 @@ class DeviceTreePanel(QWidget):
                 )
             )
             menu.addAction(import_action)
+
+        elif kind == KIND_IEC_GROUP and isinstance(payload, IecGroupInfo):
+            show_in_browser = QAction("Show in IEC 61850 Browser", self)
+            show_in_browser.triggered.connect(
+                lambda _checked=False, g=payload: self.iec_group_selected.emit(g.session_id, g)
+            )
+            menu.addAction(show_in_browser)
 
         elif kind == KIND_OBJECT and isinstance(payload, ObjectRef):
             session_info = self._find_session_for_object(index)
