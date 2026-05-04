@@ -231,6 +231,7 @@ class NewConnectionDialog(QDialog):
         is_rtu = proto_id is not None and "rtu" in proto_id.lower()
         is_iec104 = proto_id is not None and proto_id.startswith("iec104")
         is_bacnet = proto_id is not None and proto_id.startswith("bacnet")
+        is_iec61850 = proto_id is not None and proto_id.startswith("iec61850")
 
         # TCP-specific widgets
         for w in (
@@ -253,8 +254,10 @@ class NewConnectionDialog(QDialog):
         # BACnet Device ID replaces Modbus/IEC104 Unit ID
         self._device_id_row_label.setVisible(is_bacnet)
         self._device_id_spin.setVisible(is_bacnet)
-        self._unit_id_row_label.setVisible(not is_bacnet)
-        self._unit_id_spin.setVisible(not is_bacnet)
+        # IEC 61850 needs no unit/slave ID — MMS connects directly to the IED.
+        show_unit_id = not is_bacnet and not is_iec61850
+        self._unit_id_row_label.setVisible(show_unit_id)
+        self._unit_id_spin.setVisible(show_unit_id)
 
         # Reskin the unit/CA spinbox per protocol.
         if is_bacnet:
@@ -268,6 +271,10 @@ class NewConnectionDialog(QDialog):
             )
             if self._tcp_port_spin.value() in (502, 47808):
                 self._tcp_port_spin.setValue(2404)
+        elif is_iec61850:
+            # MMS standard port (IANA-assigned).
+            if self._tcp_port_spin.value() in (502, 2404, 47808):
+                self._tcp_port_spin.setValue(102)
         else:
             self._unit_id_row_label.setText(self.tr("Unit ID:"))
             if self._unit_id_spin.value() > 247:
@@ -276,7 +283,7 @@ class NewConnectionDialog(QDialog):
             self._unit_id_spin.setAccessibleName(
                 self.tr("Modbus unit ID (slave address 1\u2013247)")
             )
-            if not is_rtu and self._tcp_port_spin.value() in (2404, 47808):
+            if not is_rtu and self._tcp_port_spin.value() in (2404, 47808, 102):
                 self._tcp_port_spin.setValue(502)
 
         # Pre-fill the serial port for RTU if none is selected yet.
@@ -441,6 +448,7 @@ class NewConnectionDialog(QDialog):
         is_rtu = "rtu" in proto_id.lower()
         is_iec104 = proto_id.startswith("iec104")
         is_bacnet = proto_id.startswith("bacnet")
+        is_iec61850 = proto_id.startswith("iec61850")
         unit = self._unit_id_spin.value()
         if is_rtu:
             port = self._serial_port_combo.currentText().strip()
@@ -453,6 +461,11 @@ class NewConnectionDialog(QDialog):
             address = f"{host}:{tcp_port}"
             if dev_id > 0:
                 address += f"/dev={dev_id}"
+        elif is_iec61850:
+            # MMS: plain host:port — no unit/slave addressing in IEC 61850.
+            host = self._host_edit.text().strip()
+            tcp_port = self._tcp_port_spin.value()
+            address = f"{host}:{tcp_port}"
         else:
             host = self._host_edit.text().strip()
             tcp_port = self._tcp_port_spin.value()
