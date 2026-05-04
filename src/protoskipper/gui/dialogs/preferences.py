@@ -5,6 +5,10 @@ Collects application-wide defaults that survive across sessions. All values
 are persisted in QSettings under the "DataSailors"/"ProtoSkipper" org/app
 keys. Static helpers expose individual values so other modules (MainWindow,
 NewConnectionDialog) can read them without constructing the dialog.
+
+The dialog uses two tabs:
+  • General — operator, audit dir, session profile, theme, density
+  • BACnet  — per-protocol defaults (UDP port, APDU timeouts, COV lifetime …)
 """
 
 from __future__ import annotations
@@ -19,8 +23,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -30,6 +37,14 @@ from protoskipper.core.driver import SessionProfile
 _ORG = "DataSailors"
 _APP = "ProtoSkipper"
 _DEFAULT_AUDIT_DIR = str(Path.home() / ".protoskipper" / "audit")
+
+# BACnet defaults (used both in the dialog and by static helpers)
+_BACNET_DEFAULT_PORT = 47808
+_BACNET_DEFAULT_APDU_TIMEOUT_MS = 3000
+_BACNET_DEFAULT_APDU_RETRIES = 3
+_BACNET_DEFAULT_COV_LIFETIME_S = 300
+_BACNET_DEFAULT_RPM_BATCH_SIZE = 16
+_BACNET_DEFAULT_VENDOR_ID = 0
 
 
 class PreferencesDialog(QDialog):
@@ -42,16 +57,20 @@ class PreferencesDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(self.tr("Preferences"))
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
 
         s = QSettings(_ORG, _APP)
 
-        # ---- default operator --------------------------------------------
+        # ================================================================
+        # Tab 1 — General
+        # ================================================================
+
+        # ---- default operator -------------------------------------------
         self._operator_edit = QLineEdit(s.value("defaults/operator", "", str), self)
         self._operator_edit.setPlaceholderText(self.tr("Your name or email"))
         self._operator_edit.setAccessibleName(self.tr("Default operator email"))
 
-        # ---- audit log directory -----------------------------------------
+        # ---- audit log directory ----------------------------------------
         self._audit_dir_edit = QLineEdit(
             s.value("defaults/audit_dir", _DEFAULT_AUDIT_DIR, str), self
         )
@@ -101,13 +120,115 @@ class PreferencesDialog(QDialog):
         self._density_combo.setCurrentText(self.tr(saved_density))
         self._density_combo.setAccessibleName(self.tr("Interface density"))
 
-        # ---- layout ------------------------------------------------------
-        form = QFormLayout()
-        form.addRow(self.tr("Default operator:"), self._operator_edit)
-        form.addRow(self.tr("Audit log directory:"), audit_widget)
-        form.addRow(self.tr("Default session profile:"), self._profile_combo)
-        form.addRow(self.tr("Theme:"), self._theme_combo)
-        form.addRow(self.tr("Density:"), self._density_combo)
+        general_form = QFormLayout()
+        general_form.addRow(self.tr("Default operator:"), self._operator_edit)
+        general_form.addRow(self.tr("Audit log directory:"), audit_widget)
+        general_form.addRow(self.tr("Default session profile:"), self._profile_combo)
+        general_form.addRow(self.tr("Theme:"), self._theme_combo)
+        general_form.addRow(self.tr("Density:"), self._density_combo)
+
+        general_tab = QWidget(self)
+        general_layout = QVBoxLayout(general_tab)
+        general_layout.addLayout(general_form)
+        general_layout.addStretch()
+
+        # ================================================================
+        # Tab 2 — BACnet
+        # ================================================================
+
+        # --- local UDP port ---------------------------------------------
+        self._bacnet_port_spin = QSpinBox(self)
+        self._bacnet_port_spin.setRange(1, 65535)
+        self._bacnet_port_spin.setValue(
+            int(s.value("bacnet/local_port", _BACNET_DEFAULT_PORT, int))
+        )
+        self._bacnet_port_spin.setAccessibleName(self.tr("BACnet local UDP port"))
+
+        # --- APDU timeout -----------------------------------------------
+        self._bacnet_apdu_timeout_spin = QSpinBox(self)
+        self._bacnet_apdu_timeout_spin.setRange(500, 30000)
+        self._bacnet_apdu_timeout_spin.setSingleStep(500)
+        self._bacnet_apdu_timeout_spin.setSuffix(self.tr(" ms"))
+        self._bacnet_apdu_timeout_spin.setValue(
+            int(s.value("bacnet/apdu_timeout_ms", _BACNET_DEFAULT_APDU_TIMEOUT_MS, int))
+        )
+        self._bacnet_apdu_timeout_spin.setAccessibleName(self.tr("APDU timeout in milliseconds"))
+
+        # --- APDU retries -----------------------------------------------
+        self._bacnet_apdu_retries_spin = QSpinBox(self)
+        self._bacnet_apdu_retries_spin.setRange(0, 7)
+        self._bacnet_apdu_retries_spin.setValue(
+            int(s.value("bacnet/apdu_retries", _BACNET_DEFAULT_APDU_RETRIES, int))
+        )
+        self._bacnet_apdu_retries_spin.setAccessibleName(self.tr("Number of APDU retries"))
+
+        # --- COV default lifetime ----------------------------------------
+        self._bacnet_cov_lifetime_spin = QSpinBox(self)
+        self._bacnet_cov_lifetime_spin.setRange(0, 86400)
+        self._bacnet_cov_lifetime_spin.setSingleStep(60)
+        self._bacnet_cov_lifetime_spin.setSuffix(self.tr(" s  (0 = indefinite)"))
+        self._bacnet_cov_lifetime_spin.setValue(
+            int(s.value("bacnet/cov_lifetime_s", _BACNET_DEFAULT_COV_LIFETIME_S, int))
+        )
+        self._bacnet_cov_lifetime_spin.setAccessibleName(
+            self.tr("Default COV subscription lifetime in seconds")
+        )
+
+        # --- RPM batch size ----------------------------------------------
+        self._bacnet_rpm_batch_spin = QSpinBox(self)
+        self._bacnet_rpm_batch_spin.setRange(1, 200)
+        self._bacnet_rpm_batch_spin.setValue(
+            int(s.value("bacnet/rpm_batch_size", _BACNET_DEFAULT_RPM_BATCH_SIZE, int))
+        )
+        self._bacnet_rpm_batch_spin.setAccessibleName(
+            self.tr("Number of properties per ReadPropertyMultiple request")
+        )
+
+        # --- vendor ID ---------------------------------------------------
+        self._bacnet_vendor_id_spin = QSpinBox(self)
+        self._bacnet_vendor_id_spin.setRange(0, 65535)
+        self._bacnet_vendor_id_spin.setValue(
+            int(s.value("bacnet/vendor_id", _BACNET_DEFAULT_VENDOR_ID, int))
+        )
+        self._bacnet_vendor_id_spin.setAccessibleName(
+            self.tr("Vendor ID presented in I-Am responses (0 = ASHRAE)")
+        )
+
+        # --- Who-Is range ------------------------------------------------
+        self._bacnet_who_is_range_edit = QLineEdit(self)
+        self._bacnet_who_is_range_edit.setText(s.value("bacnet/who_is_range", "", str))
+        self._bacnet_who_is_range_edit.setPlaceholderText(
+            self.tr("e.g. 1-1000,2000  (empty = all 0-4194302)")
+        )
+        self._bacnet_who_is_range_edit.setAccessibleName(self.tr("Default Who-Is device ID range"))
+
+        bacnet_form = QFormLayout()
+        bacnet_form.addRow(self.tr("Local UDP port:"), self._bacnet_port_spin)
+        bacnet_form.addRow(self.tr("APDU timeout:"), self._bacnet_apdu_timeout_spin)
+        bacnet_form.addRow(self.tr("APDU retries:"), self._bacnet_apdu_retries_spin)
+        bacnet_form.addRow(self.tr("COV default lifetime:"), self._bacnet_cov_lifetime_spin)
+        bacnet_form.addRow(self.tr("RPM batch size:"), self._bacnet_rpm_batch_spin)
+        bacnet_form.addRow(self.tr("Vendor ID (I-Am):"), self._bacnet_vendor_id_spin)
+        bacnet_form.addRow(self.tr("Who-Is range:"), self._bacnet_who_is_range_edit)
+
+        bacnet_tab = QWidget(self)
+        bacnet_layout = QVBoxLayout(bacnet_tab)
+        bacnet_layout.addWidget(
+            QLabel(
+                self.tr("These values are used as defaults when opening new BACnet sessions."),
+                self,
+            )
+        )
+        bacnet_layout.addSpacing(8)
+        bacnet_layout.addLayout(bacnet_form)
+        bacnet_layout.addStretch()
+
+        # ================================================================
+        # Tab widget
+        # ================================================================
+        self._tabs = QTabWidget(self)
+        self._tabs.addTab(general_tab, self.tr("General"))
+        self._tabs.addTab(bacnet_tab, self.tr("BACnet"))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
@@ -116,7 +237,7 @@ class PreferencesDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addWidget(self._tabs)
         layout.addWidget(buttons)
 
     # ---- private handlers -----------------------------------------------
@@ -132,17 +253,28 @@ class PreferencesDialog(QDialog):
 
     def _save_and_accept(self) -> None:
         s = QSettings(_ORG, _APP)
+
+        # General
         s.setValue("defaults/operator", self._operator_edit.text().strip())
         s.setValue("defaults/audit_dir", self._audit_dir_edit.text().strip())
         s.setValue("defaults/profile", self._profile_combo.currentData().value)
-        # Store canonical English name regardless of display locale.
         theme_idx = self._theme_combo.currentIndex()
         s.setValue("theme", "Dark" if theme_idx == 1 else "Light")
         density_idx = self._density_combo.currentIndex()
         s.setValue("density", "Compact" if density_idx == 1 else "Comfortable")
+
+        # BACnet
+        s.setValue("bacnet/local_port", self._bacnet_port_spin.value())
+        s.setValue("bacnet/apdu_timeout_ms", self._bacnet_apdu_timeout_spin.value())
+        s.setValue("bacnet/apdu_retries", self._bacnet_apdu_retries_spin.value())
+        s.setValue("bacnet/cov_lifetime_s", self._bacnet_cov_lifetime_spin.value())
+        s.setValue("bacnet/rpm_batch_size", self._bacnet_rpm_batch_spin.value())
+        s.setValue("bacnet/vendor_id", self._bacnet_vendor_id_spin.value())
+        s.setValue("bacnet/who_is_range", self._bacnet_who_is_range_edit.text().strip())
+
         self.accept()
 
-    # ---- static helpers (used by MainWindow / NewConnectionDialog) -------
+    # ---- static helpers (General) ---------------------------------------
 
     @staticmethod
     def default_operator() -> str:
@@ -172,3 +304,54 @@ class PreferencesDialog(QDialog):
             return SessionProfile(raw)
         except ValueError:
             return SessionProfile.LAB
+
+    # ---- static helpers (BACnet) ----------------------------------------
+
+    @staticmethod
+    def bacnet_local_port() -> int:
+        """Return the saved BACnet local UDP port (default 47808)."""
+        return int(QSettings(_ORG, _APP).value("bacnet/local_port", _BACNET_DEFAULT_PORT, int))
+
+    @staticmethod
+    def bacnet_apdu_timeout_ms() -> int:
+        """Return the saved APDU timeout in milliseconds (default 3000)."""
+        return int(
+            QSettings(_ORG, _APP).value(
+                "bacnet/apdu_timeout_ms", _BACNET_DEFAULT_APDU_TIMEOUT_MS, int
+            )
+        )
+
+    @staticmethod
+    def bacnet_apdu_retries() -> int:
+        """Return the saved number of APDU retries (default 3)."""
+        return int(
+            QSettings(_ORG, _APP).value("bacnet/apdu_retries", _BACNET_DEFAULT_APDU_RETRIES, int)
+        )
+
+    @staticmethod
+    def bacnet_cov_lifetime_s() -> int:
+        """Return the saved COV subscription lifetime in seconds (default 300)."""
+        return int(
+            QSettings(_ORG, _APP).value(
+                "bacnet/cov_lifetime_s", _BACNET_DEFAULT_COV_LIFETIME_S, int
+            )
+        )
+
+    @staticmethod
+    def bacnet_rpm_batch_size() -> int:
+        """Return the saved RPM batch size (default 16)."""
+        return int(
+            QSettings(_ORG, _APP).value(
+                "bacnet/rpm_batch_size", _BACNET_DEFAULT_RPM_BATCH_SIZE, int
+            )
+        )
+
+    @staticmethod
+    def bacnet_vendor_id() -> int:
+        """Return the saved vendor ID for I-Am responses (default 0 = ASHRAE)."""
+        return int(QSettings(_ORG, _APP).value("bacnet/vendor_id", _BACNET_DEFAULT_VENDOR_ID, int))
+
+    @staticmethod
+    def bacnet_who_is_range() -> str:
+        """Return the saved Who-Is range string (empty = all devices)."""
+        return QSettings(_ORG, _APP).value("bacnet/who_is_range", "", str)

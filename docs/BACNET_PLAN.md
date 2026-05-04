@@ -1310,7 +1310,15 @@ mirror P7.B.7.
   `device_mgmt_payload`, `routing_payload`, `error_payload`).
   40 unit tests in `test_bacnet_audit_schema.py`.
 
-#### P7.I.2 Preferences extensions ⬜
+#### P7.I.2 Preferences extensions ✅
+
+> **Complete.** `PreferencesDialog` converted to a two-tab layout (General + BACnet).
+> BACnet tab exposes: local UDP port, APDU timeout, APDU retries, COV default
+> lifetime, RPM batch size, Vendor ID (I-Am), and Who-Is range. Seven new static
+> helpers (`bacnet_local_port`, `bacnet_apdu_timeout_ms`, `bacnet_apdu_retries`,
+> `bacnet_cov_lifetime_s`, `bacnet_rpm_batch_size`, `bacnet_vendor_id`,
+> `bacnet_who_is_range`) exposed for programmatic access. 24 unit tests in
+> `tests/unit/test_bacnet_preferences.py`.
 
 #### P7.I.3 Setup save/load (`bacnet-setup.json`) ✅
 
@@ -1329,10 +1337,13 @@ mirror P7.B.7.
 > specific panels (TrendLog, Alarm & Event, Schedule, Files, Routing)
 > not yet started.
 
-#### P7.I.5 Documentation ⬜
+#### P7.I.5 Documentation ✅
 
-* **Goal:** `docs/BACNET.md` user guide; `docs/manual-tests/m_bacnet_*.md`
-  scripts; protocol reference appendix.
+> **Complete.** `docs/BACNET.md` user guide covering all implemented features:
+> discovery, property reads/writes, COV, alarms, trend logs, schedules, file
+> services, device management, BBMD/FD routing, built-in simulator, setup
+> files, preferences, audit log, safety profiles, vendor profiles,
+> troubleshooting, and CLI reference.
 
 ---
 
