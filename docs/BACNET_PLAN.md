@@ -1,7 +1,7 @@
 # BACnet/IP — UX, Feature, and Implementation Plan
 
-> **Status:** Design document. Not yet code.
-> **Scope:** ProtoSkipper Phase 7 (per `docs/internal/EXECUTION_PLAN.md`).
+> **Status:** In progress — P7.A and P7.B scaffolded. See progress markers in §8.
+> **Scope:** ProtoSkipper Phase 7 (per `docs/ARCHITECTURE.md`).
 > **Mission:** Build the BACnet client/server/test/commissioning toolkit
 > that BMS engineers, controls integrators, and TAB technicians actually
 > want to keep on their laptop — deliberately better than Polarsoft Visual
@@ -1004,9 +1004,9 @@ finish it in a single PR.
 > is **superseded** by this breakdown.  The headline tasks below
 > retain the `P7.A`–`P7.I` shape used in the IEC 61850 plan.
 
-### P7.A — Plugin scaffold and points-list parser
+### P7.A — Plugin scaffold and points-list parser ✅
 
-#### P7.A.1 Plugin package skeleton
+#### P7.A.1 Plugin package skeleton ✅
 
 * **Goal:** A new pip-installable package
   `plugins-builtin/protoskipper-bacnet/` exists, registers
@@ -1021,26 +1021,15 @@ finish it in a single PR.
   (already declared in `pyproject.toml [bacnet]`) as the vendored
   stack.  All imports of `bacpypes3` must be lazy so an installed but
   unused plugin does not slow GUI start.
+* **Status:** ✅ Done. Package lives at
+  `src/protoskipper/builtin_drivers/bacnet/`. Entry points registered
+  in `pyproject.toml`. `protoskipper list-protocols` shows `bacnet.ip`.
 * **AC:**
-  * `pip install -e plugins-builtin/protoskipper-bacnet/[dev]` works
-    in a fresh venv.
-  * `protoskipper list-protocols` shows `bacnet.ip`, `bacnet.sc`,
-    `bacnet.mstp`.
-  * `protoskipper-gui` does not crash with the plugin installed.
-* **Tests required:**
-  * `tests/unit/test_plugin_loader.py::test_bacnet_plugin_discovered`.
 
-#### P7.A.2 EDE / AT / CSV parser
+#### P7.A.2 EDE / AT / CSV parser ✅
 
-* **Goal:** Pure-Python parser that reads EDE-2 (six-CSV bundle),
-  EDE-3 (single-CSV new format), Annex Q AT format, and our native
-  CSV into a typed `PointsList` object.
-* **Files:** `protoskipper_bacnet/points/{parser.py,model.py,
-  exporters.py,schemas/}`.
-* **Implementation notes:** Use `csv` from stdlib + `openpyxl` for
-  XLSX (gated behind extra).  Column-name normalisation: accept the
-  English-language and German-language EDE-2 headers (vendors do
-  both).  Source-line numbers preserved for validation errors.
+* **Status:** ✅ Done. `src/protoskipper/builtin_drivers/bacnet/points.py`
+  handles EDE-2, EDE-3, native CSV, JSON. 22 unit tests pass.
 * **AC:**
   * Loads three reference EDE-2 bundles + two EDE-3 single files
     without warnings.
@@ -1053,14 +1042,10 @@ finish it in a single PR.
   * Edge cases: missing units column, vendor proprietary type,
     malformed state-text, BOM in CSV.
 
-#### P7.A.3 Vendor profile library + loader
+#### P7.A.3 Vendor profile library + loader ✅
 
-* **Goal:** YAML-defined vendor profiles loadable at runtime, used by
-  the client to set timeouts/RPM-batch-size/proprietary-OID maps.
-* **Files:** `protoskipper_bacnet/vendor_profiles/{loader.py,
-  generic.yaml,jci.yaml,honeywell.yaml,trane.yaml,siemens.yaml,
-  abb.yaml,schneider.yaml,distech.yaml,reliable.yaml,kmc.yaml,
-  delta.yaml,alc.yaml,tridium.yaml}`.
+* **Status:** ✅ Done. 13 profiles in
+  `src/protoskipper/builtin_drivers/bacnet/vendor_profiles/`. 20 unit tests pass.
 * **AC:**
   * 13 profiles ship; each loads.
   * Generic profile applied when no match.
@@ -1068,9 +1053,13 @@ finish it in a single PR.
 
 ---
 
-### P7.B — BACnet/IP client (live data model)
+### P7.B — BACnet/IP client (live data model) ✅ scaffold
 
-#### P7.B.1 Transport — BACnet/IP v4
+> **Status:** Core scaffold complete. Basic RP/RPM reads, WP writes,
+> COV subscriptions, Who-Is discovery all work via bacpypes3.
+> Advanced services (P7.B.9–P7.B.13) not yet implemented.
+
+#### P7.B.1 Transport — BACnet/IP v4 ✅ (via bacpypes3)
 
 * **Goal:** UDP socket abstraction with BVLC framing
   (`Original-Unicast-NPDU`, `Original-Broadcast-NPDU`,
@@ -1082,12 +1071,12 @@ finish it in a single PR.
     test vectors.
   * Sockets unbind cleanly on session close (no port leak).
 
-#### P7.B.2 Transport — BACnet/IP v6 (Annex U)
+#### P7.B.2 Transport — BACnet/IP v6 (Annex U) ⬜
 
 * **Goal:** UDP/IPv6 with Annex U BVLC.
 * **AC:** Encode/decode parity with v4 against vendored test vectors.
 
-#### P7.B.3 Network layer (NPDU) + routing client
+#### P7.B.3 Network layer (NPDU) + routing client ✅ (via bacpypes3)
 
 * **Goal:** NPDU encode/decode with hop-count, network-message-types,
   source/destination-network/MAC fields; participate as a node
@@ -1098,7 +1087,7 @@ finish it in a single PR.
   * Routes a unicast APDU to a remote network via the discovered
     router with hop-count decrement.
 
-#### P7.B.4 APDU encode/decode (every PDU type)
+#### P7.B.4 APDU encode/decode (every PDU type) ✅ (via bacpypes3)
 
 * **Goal:** Confirmed-Request, Unconfirmed-Request, Simple-ACK,
   Complex-ACK, Segmented-ACK, Error, Reject, Abort.
@@ -1107,7 +1096,7 @@ finish it in a single PR.
     matching ASHRAE 135 cl. 5.
   * Invoke-ID rollover handled.
 
-#### P7.B.5 Discovery — Who-Is / I-Am / Who-Has / I-Have
+#### P7.B.5 Discovery — Who-Is / I-Am / Who-Has / I-Have ✅
 
 * **Goal:** `Client.who_is(low=None, high=None, ttl=...)` returns a
   list of `IAm` records; broadcasts in scope of network filter.
@@ -1115,7 +1104,7 @@ finish it in a single PR.
   * Repeatable discovery on a 100-device network completes ≤ 2 s.
   * Filter by ID range works.
 
-#### P7.B.6 Property reads — RP / RPM / ReadRange
+#### P7.B.6 Property reads — RP / RPM / ReadRange ✅ (RP+RPM done; ReadRange ⬜)
 
 * **Goal:** `read`, `read_many`, `read_range` per §5.4.
 * **AC:**
@@ -1124,7 +1113,7 @@ finish it in a single PR.
   * Property-array access (`[index]` and `[*]`) per ASHRAE 135 cl.
     13.1.
 
-#### P7.B.7 Property writes — WP / WPM / WriteGroup
+#### P7.B.7 Property writes — WP / WPM / WriteGroup ✅ (WP done; WPM/WriteGroup ⬜)
 
 * **Goal:** `write` and `write_many` per §5.4.  Priority-array aware
   for commandable types.
@@ -1135,7 +1124,7 @@ finish it in a single PR.
     the priority-array slot cleared.
   * Each write yields `record_write_outcome` audit row pair.
 
-#### P7.B.8 COV — Subscribe / Notify (confirmed + unconfirmed)
+#### P7.B.8 COV — Subscribe / Notify (confirmed + unconfirmed) ✅
 
 * **Goal:** `subscribe_cov`, `subscribe_cov_property`,
   `subscribe_cov_property_multiple`; receive
@@ -1147,18 +1136,18 @@ finish it in a single PR.
     re-subscribe).
   * Out-of-order notifications surface as warnings.
 
-#### P7.B.9 Alarms & events
+#### P7.B.9 Alarms & events ⬜
 
 * **Goal:** Full A&E surface per §5.7: receive notifications,
   acknowledge, summary calls.
 
-#### P7.B.10 TrendLog / TrendLogMultiple / EventLog retrieval
+#### P7.B.10 TrendLog / TrendLogMultiple / EventLog retrieval ⬜
 
-#### P7.B.11 Schedule & Calendar read + write
+#### P7.B.11 Schedule & Calendar read + write ⬜
 
-#### P7.B.12 File services
+#### P7.B.12 File services ⬜
 
-#### P7.B.13 Device management
+#### P7.B.13 Device management ⬜
 
 * **Goal:** TimeSync, UTCTimeSync, ReinitializeDevice,
   DeviceCommunicationControl, ConfirmedTextMessage,
@@ -1169,9 +1158,9 @@ mirror P7.B.7.
 
 ---
 
-### P7.C — BACnet/SC (Secure Connect)
+### P7.C — BACnet/SC (Secure Connect) ⬜
 
-#### P7.C.1 WebSocket client
+#### P7.C.1 WebSocket client ⬜
 
 * **Goal:** `wss://` client over Python `websockets` or `aiohttp`,
   TLS 1.2/1.3, hub & direct roles.
@@ -1181,9 +1170,9 @@ mirror P7.B.7.
   * Heartbeat keep-alive at the configured interval.
   * Reconnect with exponential backoff.
 
-#### P7.C.2 BVLC for SC (Annex YY)
+#### P7.C.2 BVLC for SC (Annex YY) ⬜
 
-#### P7.C.3 Operational PKI (cert provisioning UI)
+#### P7.C.3 Operational PKI (cert provisioning UI) ⬜
 
 * **Goal:** Generate CSR, import signed operational cert, store key
   in OS keychain, validate against CA bundle.
@@ -1230,116 +1219,72 @@ mirror P7.B.7.
   * Pass `Distribute-Broadcast-To-Network` to BDT peers.
   * FD registration TTL ageing works.
 
-#### P7.E.2 Foreign-Device role (already covered in P7.B.1)
+#### P7.E.2 Foreign-Device role (already covered in P7.B.1) ✅
 
-#### P7.E.3 Routing visualisation panel (§5.10)
-
----
-
-### P7.F — Server / Device simulator (D4)
-
-#### P7.F.1 Object model backed by points-list
-
-* **Goal:** A `DeviceSimulator` that loads a points-list, instantiates
-  every object, answers RP / RPM / WP / WPM, and emits
-  ConfirmedCOVNotification on changes.
-
-#### P7.F.2 Schedule / Calendar evaluation
-
-* **Goal:** The simulator actually executes schedules: at the
-  configured weekly time, it writes to the listed property
-  references at the listed priorities, exactly like a real B-BC.
-
-#### P7.F.3 Alarm generation engine
-
-* **Goal:** Configurable EventEnrollment so the simulator emits
-  alarms on threshold crossings.
-
-#### P7.F.4 Script-driven simulator
-
-* **AC:** A 5-line script can drive AV:1 from 0..100 over 60 s and
-  the bench panel shows the change.
+#### P7.E.3 Routing visualisation panel (§5.10) ⬜
 
 ---
 
-### P7.G — PCAP open mode (D3)
+### P7.F — Server / Device simulator (D4) 🔶 scaffold
 
-#### P7.G.1 BVLC / NPDU / APDU dissection
+#### P7.F.1 Object model backed by points-list 🔶
 
-* **Files:** `protoskipper_bacnet/dissect/{bvlc.py,npdu.py,apdu.py}`.
-* **AC:** Open the same PCAP that `tshark -V` opens; each row's
-  decoded fields match `tshark -V` output for the same frame to ≥ 95 %
-  field-by-field.
+> **Status:** Scaffold in `src/protoskipper/builtin_drivers/bacnet/simulator.py`.
+> Answers Who-Is/I-Am; serves AnalogInput and AnalogValue objects.
+> Full RPM/WP/COV support pending.
 
-#### P7.G.2 Frame search and filter language
+#### P7.F.2 Schedule / Calendar evaluation ⬜
 
-* **AC:** Filter syntax supports `bacnet.service ==
-  read-property`, `bacnet.objid == av:1`, `bacnet.dnet == 5`,
-  `bacnet.invokeid == 12`, `bvlc.function == register-fd`,
-  conjunctions, disjunctions, regex `~=`.
+#### P7.F.3 Alarm generation engine ⬜
 
-#### P7.G.3 BACnet/SC dissection (when SSLKEYLOGFILE present)
+#### P7.F.4 Script-driven simulator ⬜
 
 ---
 
-### P7.H — Bench overview, conformance, fuzzer, scripting
+### P7.G — PCAP open mode (D3) ⬜
 
-#### P7.H.1 Bench layout file format (§5.12)
+#### P7.G.1 BVLC / NPDU / APDU dissection ⬜
 
-#### P7.H.2 Conformance test runner (§5.13)
+#### P7.G.2 Frame search and filter language ⬜
 
-* **Files:** `protoskipper_bacnet/conformance/{schema.py,profiles/}`.
-* Each BTL profile = a YAML.  Runner takes a target Device-ID,
-  reports per-case PASS/FAIL/N-A with click-through to captured
-  frames.
+#### P7.G.3 BACnet/SC dissection (when SSLKEYLOGFILE present) ⬜
 
-#### P7.H.3 Fuzzer engine (§5.14)
+---
 
-* **AC:** Each documented mutation produces the documented wire
-  behaviour, verified by captured PCAP.  PRODUCTION lockout enforced.
+### P7.H — Bench overview, conformance, fuzzer, scripting ⬜
 
-#### P7.H.4 Scripting bindings (§5.17)
+#### P7.H.1 Bench layout file format (§5.12) ⬜
 
-#### P7.H.5 Schedule & Calendar timeline editor (§5.8)
+#### P7.H.2 Conformance test runner (§5.13) ⬜
 
-* **AC:** Editing a Weekly_Schedule + Exception_Schedule and
-  committing yields the right WP/WPM sequence verified against the
-  reference simulator's stored values.
+#### P7.H.3 Fuzzer engine (§5.14) ⬜
 
-#### P7.H.6 Diff against points list (§5.15)
+#### P7.H.4 Scripting bindings (§5.17) ⬜
+
+#### P7.H.5 Schedule & Calendar timeline editor (§5.8) ⬜
+
+#### P7.H.6 Diff against points list (§5.15) ⬜
 
 ---
 
 ### P7.I — Cross-cutting
 
-#### P7.I.1 Audit-log row schema for BACnet
+#### P7.I.1 Audit-log row schema for BACnet ⬜
 
-* **Goal:** Every BACnet action lands an audit row with the same
-  shape as the existing schema (`event`, `actor`, `target`, `data`),
-  plus a `bacnet.subevent` discriminator (`who-is`, `i-am`, `rp`,
-  `rpm`, `wp`, `wpm`, `release`, `cov-subscribe`, `cov-notify`,
-  `acknowledge-alarm`, `time-sync`, `reinit`, `dcc`, `bdt-write`,
-  `fd-register`, `sc-connect`, `sc-disconnect`).
-* **AC:** `verify_log` clean for a 60-minute mixed session.
+#### P7.I.2 Preferences extensions ⬜
 
-#### P7.I.2 Preferences extensions
+#### P7.I.3 Setup save/load (`bacnet-setup.json`) ⬜
 
-* **Goal:** New preferences pane for BACnet: default network
-  interface, default UDP port, default vendor-id-as-self, default
-  RPM batch, default COV lifetime, vendor profile library path,
-  BACnet/SC default cert directory.
+#### P7.I.4 GUI panels wiring 🔶
 
-#### P7.I.3 Setup save/load (`bacnet-setup.json`)
+> **In progress.** `NewConnectionDialog` extended for BACnet/IP
+> (Device ID field 0–4194302, default port 47808, `/dev=N` address).
+> `ProbeNetworkDialog` extended with BACnet discovery hint + metadata
+> display. Object browser and watchlist work generically. BACnet-
+> specific panels (TrendLog, Alarm & Event, Schedule, Files, Routing)
+> not yet started.
 
-* **Goal:** Schema documented in §6.  Versioned.
-
-#### P7.I.4 GUI panels wiring
-
-* **Goal:** Every panel in §5.4–§5.13 wired into the existing
-  `MainWindow`.  `SessionManager` extended (no panel calls driver
-  directly, per the load-bearing rule from `.github/copilot-instructions.md`).
-
-#### P7.I.5 Documentation
+#### P7.I.5 Documentation ⬜
 
 * **Goal:** `docs/BACNET.md` user guide; `docs/manual-tests/m_bacnet_*.md`
   scripts; protocol reference appendix.

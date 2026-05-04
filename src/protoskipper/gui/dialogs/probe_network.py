@@ -54,6 +54,10 @@ _TARGET_HINTS = {
     "modbus.rtu": (
         "Examples: /dev/ttyUSB0  |  /dev/ttyUSB0@9600,N,1/units=1-32  |  COM4@19200,E,1/unit=3"
     ),
+    "bacnet.ip": (
+        "Examples: broadcast  |  192.168.1.255  |  10.0.0.5  |  "
+        "low=1,high=1000  |  broadcast,low=1,high=4194302"
+    ),
 }
 
 
@@ -268,6 +272,7 @@ class ProbeNetworkDialog(QDialog):
         self._table.insertRow(row)
         meta = device.metadata or {}
         notes_parts = []
+        # Modbus / generic fields
         if "unit_id" in meta:
             notes_parts.append(f"unit_id={meta['unit_id']}")
         if "product_code" in meta:
@@ -278,6 +283,13 @@ class ProbeNetworkDialog(QDialog):
             notes_parts.append(
                 f"{meta['baudrate']},{meta.get('parity', 'N')},{meta.get('stopbits', 1)}"
             )
+        # BACnet-specific fields
+        if "device_id" in meta and meta["device_id"] is not None:
+            notes_parts.append(f"dev={meta['device_id']}")
+        if "vendor_id" in meta and meta["vendor_id"] is not None:
+            notes_parts.append(f"vendor_id={meta['vendor_id']}")
+        if "max_apdu" in meta and meta["max_apdu"] is not None:
+            notes_parts.append(f"max_apdu={meta['max_apdu']}")
         notes = "  ".join(notes_parts)
 
         self._table.setItem(row, 0, QTableWidgetItem(device.address))
