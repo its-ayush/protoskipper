@@ -70,6 +70,7 @@ from protoskipper.gui.panels import (
     Iec104InterrogationPanel,
     Iec104TimeSyncPanel,
     Iec61850BrowserPanel,
+    LogPanel,
     ObjectBrowserPanel,
     PacketViewPanel,
     ScriptingConsolePanel,
@@ -518,6 +519,19 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_soe)
         self._dock_soe = dock_soe
 
+        # ---- Log panel (tabified with SOE, active by default) ----
+        self._log_panel = LogPanel(self)
+        dock_log = QDockWidget("Logs", self)
+        dock_log.setObjectName("LogDock")
+        dock_log.setWidget(self._log_panel)
+        dock_log.setAllowedAreas(
+            Qt.DockWidgetArea.BottomDockWidgetArea | Qt.DockWidgetArea.TopDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_log)
+        self.tabifyDockWidget(dock_soe, dock_log)
+        dock_log.raise_()  # show Logs tab by default
+        self._dock_log = dock_log
+
         # ---- right: watchlist + session status ----
         self._watchlist = WatchlistPanel(self._state, self._session_manager, self)
         dock_right_top = QDockWidget("Watchlist", self)
@@ -568,6 +582,7 @@ class MainWindow(QMainWindow):
         panels_submenu.addAction(self._dock_watchlist.toggleViewAction())
         panels_submenu.addAction(self._dock_sessions.toggleViewAction())
         panels_submenu.addAction(self._dock_soe.toggleViewAction())
+        panels_submenu.addAction(self._dock_log.toggleViewAction())
         panels_submenu.addAction(self._dock_console.toggleViewAction())
         view_menu.addSeparator()
         restore_action = view_menu.addAction(self.tr("Restore default layout"))
@@ -579,11 +594,14 @@ class MainWindow(QMainWindow):
         self._dock_watchlist.setVisible(True)
         self._dock_sessions.setVisible(True)
         self._dock_soe.setVisible(True)
+        self._dock_log.setVisible(True)
         # Re-add to their default sides (already added; just ensure visible).
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_devices)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_watchlist)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock_sessions)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._dock_soe)
+        self.tabifyDockWidget(self._dock_soe, self._dock_log)
+        self._dock_log.raise_()
 
     def _build_status_bar(self) -> None:
         bar = QStatusBar(self)

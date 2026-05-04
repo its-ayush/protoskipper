@@ -214,7 +214,7 @@ class Iec61850BrowserPanel(QWidget):
         User triggered "Add to Watchlist" for a tag.
     """
 
-    write_requested = Signal(object)  # ObjectRef
+    write_requested = Signal(str, object)  # session_id, ObjectRef
     add_to_watchlist_requested = Signal(str, object)  # session_id, ObjectRef
 
     def __init__(
@@ -311,10 +311,24 @@ class Iec61850BrowserPanel(QWidget):
         self._table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table_view.setAlternatingRowColors(True)
         self._table_view.setSortingEnabled(True)
-        self._table_view.horizontalHeader().setSectionResizeMode(
-            _COL_LABEL, QHeaderView.ResizeMode.Stretch
-        )
-        self._table_view.horizontalHeader().setStretchLastSection(False)
+        hdr = self._table_view.horizontalHeader()
+        # All columns are interactively resizable so users can widen/narrow any column.
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        # Sensible initial widths; MMS Path is the widest because it carries
+        # the full LD/LN/DO/DA path (e.g. CTRL/MMXU1.A.phsA.cVal.mag.f).
+        col_widths = {
+            _COL_LABEL: 340,
+            _COL_FC: 45,
+            _COL_TYPE: 90,
+            _COL_CDC: 80,
+            _COL_VALUE: 130,
+            _COL_QUALITY: 85,
+            _COL_POLL: 80,
+            _COL_ACCESS: 60,
+        }
+        for col, width in col_widths.items():
+            self._table_view.setColumnWidth(col, width)
         self._table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
         self._table_view.addAction(self._action_read_sel)
         self._table_view.addAction(self._action_write)
@@ -412,10 +426,10 @@ class Iec61850BrowserPanel(QWidget):
 
     def _on_write_clicked(self) -> None:
         refs = self._selected_refs()
-        if not refs:
+        if not refs or self._session_id is None:
             return
         ref = refs[0]
-        self.write_requested.emit(ref)
+        self.write_requested.emit(self._session_id, ref)
 
     def _on_add_watchlist(self) -> None:
         if self._session_id is None:

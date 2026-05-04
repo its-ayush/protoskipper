@@ -176,6 +176,10 @@ _MMS_OCTET_STRING: int = 7
 _MMS_VISIBLE_STRING: int = 8
 _MMS_STRING: int = 13
 _MMS_UTC_TIME: int = 14
+# The MMS protocol allows an IED to embed a DATA_ACCESS_ERROR indicator
+# inside an otherwise-successful ReadResponse (IED_ERROR_OK).  libiec61850
+# surfaces this as an MmsValue with type 15 rather than as an error code.
+_MMS_DATA_ACCESS_ERROR: int = 15
 
 # ---------------------------------------------------------------------------
 # IedClientError code -> human-readable name
@@ -890,6 +894,14 @@ class MmsClient:
                 error_code=error,
             )
         try:
+            # An IED may embed DATA_ACCESS_ERROR (type 15) inside a
+            # successful ReadResponse.  Treat it the same as an explicit
+            # IED error so callers see a MmsDirectoryError, not None.
+            if lib.MmsValue_getType(mms_val) == _MMS_DATA_ACCESS_ERROR:
+                raise MmsDirectoryError(
+                    f"ReadObject({object_ref!r}, FC={fc}) returned DATA_ACCESS_ERROR",
+                    error_code=lib.IED_ERROR_OK,
+                )
             python_val = _mms_value_to_python(lib, mms_val)
         finally:
             if mms_val is not None:
