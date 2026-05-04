@@ -1692,3 +1692,137 @@ class TestSessionSgcbServices:
             session.select_edit_sg("LD/LLN0.SGCB", 1)
         with pytest.raises(MmsDirectoryError):
             session.confirm_edit_sg("LD/LLN0.SGCB")
+
+
+# ---------------------------------------------------------------------------
+# P8.I.1 — Audit-log row schema for IEC 61850
+# ---------------------------------------------------------------------------
+
+
+class TestIec61850AuditSchema:
+    """Every IEC 61850 session operation records a typed audit row (P8.I.1)."""
+
+    @pytest.fixture
+    def audited_session(self):  # type: ignore[no-untyped-def]
+        """Return (session, audit_rows_list) with a capturing audit callback."""
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import RcbValues, SgcbValues
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext, SessionProfile
+
+        audited: list[dict] = []
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = SafetyContext(
+            profile=SessionProfile.LAB,
+            confirm_callback=lambda i, p: True,
+            audit_callback=lambda **kw: audited.append(kw),
+        )
+        mock_client = MagicMock()
+        mock_client.get_server_directory.return_value = ["LD0"]
+        mock_client.get_logical_device_directory.return_value = ["LLN0"]
+        mock_client.get_logical_node_directory.return_value = ["Mod"]
+        mock_client.enable_report.return_value = MagicMock(spec=RcbValues)
+        mock_client.query_log_by_time.return_value = ([], False)
+        mock_client.query_log_after.return_value = ([], False)
+        mock_client.list_files.return_value = []
+        mock_client.get_file.return_value = b"data"
+        mock_client.get_sgcb_values.return_value = SgcbValues(num_of_sgs=2, act_sg=1)
+        session = Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+        return session, audited
+
+    def _events(self, audited: list[dict]) -> list[str]:
+        return [r["event"] for r in audited]
+
+    def test_enumerate_objects_records_browse(self, audited_session) -> None:
+        session, audited = audited_session
+        list(session.enumerate_objects())
+        assert "iec61850_browse" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_browse")
+        assert row["subevent"] == "enumerate_objects"
+        assert row["object_count"] == 1
+
+    def test_subscribe_report_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.subscribe_report("LD0/LLN0.BR.rcb01", is_buffered=True, on_report=lambda r: None)
+        assert "iec61850_report_subscribe" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_report_subscribe")
+        assert row["rcb_ref"] == "LD0/LLN0.BR.rcb01"
+        assert row["buffered"] is True
+
+    def test_unsubscribe_report_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.unsubscribe_report("LD0/LLN0.BR.rcb01", is_buffered=True)
+        assert "iec61850_report_unsubscribe" in self._events(audited)
+
+    def test_query_log_by_time_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.query_log_by_time("LD0/LLN0$GeneralLog", 0, 1000)
+        assert "iec61850_log_query" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_log_query")
+        assert row["subevent"] == "query_log_by_time"
+        assert row["log_ref"] == "LD0/LLN0$GeneralLog"
+
+    def test_query_log_after_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.query_log_after("LD0/LLN0$GeneralLog", b"\x00\x01", 500)
+        assert "iec61850_log_query" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_log_query")
+        assert row["subevent"] == "query_log_after"
+
+    def test_list_files_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.list_files("/")
+        assert "iec61850_file_list" in self._events(audited)
+
+    def test_get_file_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.get_file("/COMTRADE/test.cfg")
+        assert "iec61850_file_get" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_file_get")
+        assert row["remote_path"] == "/COMTRADE/test.cfg"
+        assert row["size_bytes"] == 4  # len(b"data")
+
+    def test_delete_file_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.delete_file("/COMTRADE/old.cfg")
+        assert "iec61850_file_delete" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_file_delete")
+        assert row["remote_path"] == "/COMTRADE/old.cfg"
+
+    def test_get_sgcb_values_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.get_sgcb_values("LD0/LLN0.SGCB")
+        assert "iec61850_sg_read" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_sg_read")
+        assert row["num_of_sgs"] == 2
+        assert row["act_sg"] == 1
+
+    def test_select_active_sg_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.select_active_sg("LD0/LLN0.SGCB", 2)
+        assert "iec61850_sg_select_active" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_sg_select_active")
+        assert row["sg_num"] == 2
+
+    def test_select_edit_sg_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.select_edit_sg("LD0/LLN0.SGCB", 1)
+        assert "iec61850_sg_select_edit" in self._events(audited)
+
+    def test_confirm_edit_sg_records_audit(self, audited_session) -> None:
+        session, audited = audited_session
+        session.confirm_edit_sg("LD0/LLN0.SGCB")
+        assert "iec61850_sg_confirm_edit" in self._events(audited)
+        row = next(r for r in audited if r["event"] == "iec61850_sg_confirm_edit")
+        assert row["sgcb_ref"] == "LD0/LLN0.SGCB"
+
+    def test_all_rows_have_target_field(self, audited_session) -> None:
+        """Every IEC 61850 audit row carries the device address as 'target'."""
+        session, audited = audited_session
+        list(session.enumerate_objects())
+        session.list_files(None)
+        for row in audited:
+            if row["event"].startswith("iec61850_"):
+                assert "target" in row, f"Row {row['event']} missing 'target' field"

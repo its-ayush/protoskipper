@@ -265,6 +265,19 @@ class SafetyContext:
                 outcome=dict(result.metadata) if result.metadata else None,
             )
 
+    def record_event(self, event: str, **fields: Any) -> None:
+        """Record a protocol operation that is not a write.
+
+        Drivers call this to log reads, subscriptions, browse operations,
+        and other non-destructive (or non-gated) actions.  The ``event``
+        string should be protocol-qualified to avoid collisions, e.g.
+        ``"iec61850_browse"``, ``"iec61850_goose_subscribe_start"``.
+
+        Callers MAY add a ``subevent`` keyword for finer-grained
+        discrimination within a protocol family.
+        """
+        self._audit(event=event, **fields)
+
 
 # Callback signatures used by SafetyContext - kept loose on purpose so the
 # core does not depend on the GUI or the audit module.

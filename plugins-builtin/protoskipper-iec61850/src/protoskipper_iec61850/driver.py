@@ -273,6 +273,7 @@ class Iec61850MmsSession(DriverSession):
             _logger.warning("GetServerDirectory failed: %s", exc)
             return
 
+        total = 0
         for ld_name in ld_names:
             try:
                 ln_names = self._client.get_logical_device_directory(ld_name)
@@ -292,6 +293,7 @@ class Iec61850MmsSession(DriverSession):
 
                 for do_name in do_names:
                     do_ref = f"{ln_ref}.{do_name}"
+                    total += 1
                     yield ObjectRef(
                         device=self.device,
                         object_id=do_ref,
@@ -299,6 +301,13 @@ class Iec61850MmsSession(DriverSession):
                         access=Access.READ_ONLY,
                         label=do_ref,
                     )
+
+        self.safety.record_event(
+            "iec61850_browse",
+            subevent="enumerate_objects",
+            target=self.device.address,
+            object_count=total,
+        )
 
     def read(self, ref: ObjectRef) -> ReadResult:
         """Read a single data object or data attribute.
@@ -499,7 +508,17 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.enable_report(rcb_ref, is_buffered, trg_ops, intg_pd, on_report)
+        rcb = self._client.enable_report(rcb_ref, is_buffered, trg_ops, intg_pd, on_report)
+        self.safety.record_event(
+            "iec61850_report_subscribe",
+            subevent="subscribe_report",
+            target=self.device.address,
+            rcb_ref=rcb_ref,
+            buffered=is_buffered,
+            trg_ops=trg_ops,
+            intg_pd_ms=intg_pd,
+        )
+        return rcb
 
     def unsubscribe_report(self, rcb_ref: str, is_buffered: bool) -> None:
         """Disable reporting on a Report Control Block and remove the handler.
@@ -516,6 +535,13 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is not None:
             self._client.disable_report(rcb_ref, is_buffered)
+            self.safety.record_event(
+                "iec61850_report_unsubscribe",
+                subevent="unsubscribe_report",
+                target=self.device.address,
+                rcb_ref=rcb_ref,
+                buffered=is_buffered,
+            )
 
     def query_log_by_time(
         self,
@@ -549,7 +575,18 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.query_log_by_time(log_ref, start_ms, end_ms)
+        entries, more = self._client.query_log_by_time(log_ref, start_ms, end_ms)
+        self.safety.record_event(
+            "iec61850_log_query",
+            subevent="query_log_by_time",
+            target=self.device.address,
+            log_ref=log_ref,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            entry_count=len(entries),
+            more_follows=more,
+        )
+        return entries, more
 
     def query_log_after(
         self,
@@ -582,7 +619,17 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.query_log_after(log_ref, entry_id, timestamp_ms)
+        entries, more = self._client.query_log_after(log_ref, entry_id, timestamp_ms)
+        self.safety.record_event(
+            "iec61850_log_query",
+            subevent="query_log_after",
+            target=self.device.address,
+            log_ref=log_ref,
+            after_timestamp_ms=timestamp_ms,
+            entry_count=len(entries),
+            more_follows=more,
+        )
+        return entries, more
 
     # ------------------------------------------------------------------
     # File services (P8.B.8)
@@ -601,7 +648,15 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.list_files(directory)
+        infos = self._client.list_files(directory)
+        self.safety.record_event(
+            "iec61850_file_list",
+            subevent="list_files",
+            target=self.device.address,
+            directory=directory or "/",
+            file_count=len(infos),
+        )
+        return infos
 
     def get_file(self, remote_path: str) -> bytes:
         """Download a file from the IED.
@@ -616,7 +671,15 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.get_file(remote_path)
+        data = self._client.get_file(remote_path)
+        self.safety.record_event(
+            "iec61850_file_get",
+            subevent="get_file",
+            target=self.device.address,
+            remote_path=remote_path,
+            size_bytes=len(data),
+        )
+        return data
 
     def delete_file(self, remote_path: str) -> None:
         """Delete a file on the IED.
@@ -632,6 +695,12 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         self._client.delete_file(remote_path)
+        self.safety.record_event(
+            "iec61850_file_delete",
+            subevent="delete_file",
+            target=self.device.address,
+            remote_path=remote_path,
+        )
 
     # ------------------------------------------------------------------
     # Setting-group services (P8.B.9)
@@ -650,7 +719,16 @@ class Iec61850MmsSession(DriverSession):
         """
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
-        return self._client.get_sgcb_values(sgcb_ref)
+        values = self._client.get_sgcb_values(sgcb_ref)
+        self.safety.record_event(
+            "iec61850_sg_read",
+            subevent="get_sgcb_values",
+            target=self.device.address,
+            sgcb_ref=sgcb_ref,
+            num_of_sgs=values.num_of_sgs,
+            act_sg=values.act_sg,
+        )
+        return values
 
     def select_active_sg(self, sgcb_ref: str, sg_num: int) -> None:
         """Activate a specific setting group.
@@ -666,6 +744,13 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         self._client.select_active_sg(sgcb_ref, sg_num)
+        self.safety.record_event(
+            "iec61850_sg_select_active",
+            subevent="select_active_sg",
+            target=self.device.address,
+            sgcb_ref=sgcb_ref,
+            sg_num=sg_num,
+        )
 
     def select_edit_sg(self, sgcb_ref: str, sg_num: int) -> None:
         """Open a setting group for editing.
@@ -681,6 +766,13 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         self._client.select_edit_sg(sgcb_ref, sg_num)
+        self.safety.record_event(
+            "iec61850_sg_select_edit",
+            subevent="select_edit_sg",
+            target=self.device.address,
+            sgcb_ref=sgcb_ref,
+            sg_num=sg_num,
+        )
 
     def confirm_edit_sg(self, sgcb_ref: str) -> None:
         """Confirm edits to the currently open setting group.
@@ -696,6 +788,12 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         self._client.confirm_edit_sg(sgcb_ref)
+        self.safety.record_event(
+            "iec61850_sg_confirm_edit",
+            subevent="confirm_edit_sg",
+            target=self.device.address,
+            sgcb_ref=sgcb_ref,
+        )
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""

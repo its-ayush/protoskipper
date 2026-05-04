@@ -157,3 +157,36 @@ def test_denied_write_has_no_outcome_row() -> None:
     events = [r["event"] for r in audited]
     assert "write_committed" not in events
     assert "write_failed" not in events
+
+
+def test_record_event_routes_to_audit_callback() -> None:
+    """SafetyContext.record_event() appends an audit row for non-write events."""
+    audited: list[dict] = []
+
+    safety = SafetyContext(
+        profile=SessionProfile.LAB,
+        confirm_callback=lambda i, p: True,
+        audit_callback=lambda **fields: audited.append(fields),
+    )
+    safety.record_event("iec61850_browse", subevent="enumerate_objects", target="10.0.0.1:102")
+
+    assert len(audited) == 1
+    row = audited[0]
+    assert row["event"] == "iec61850_browse"
+    assert row["subevent"] == "enumerate_objects"
+    assert row["target"] == "10.0.0.1:102"
+
+
+def test_record_event_does_not_require_write_fields() -> None:
+    """record_event() accepts arbitrary keyword args without the write-intent fields."""
+    audited: list[dict] = []
+    safety = SafetyContext(
+        profile=SessionProfile.LAB,
+        confirm_callback=lambda i, p: True,
+        audit_callback=lambda **fields: audited.append(fields),
+    )
+    safety.record_event("custom_event", foo="bar", count=5)
+
+    assert audited[0]["event"] == "custom_event"
+    assert audited[0]["foo"] == "bar"
+    assert audited[0]["count"] == 5
