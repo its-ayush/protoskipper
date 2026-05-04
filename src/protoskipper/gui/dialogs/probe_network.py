@@ -57,7 +57,8 @@ _TARGET_HINTS = {
     "bacnet.ip": (
         "Examples: broadcast  |  192.168.1.255  |  10.10.14.0/23  |  "
         "10.0.0.5  |  low=1,high=1000  |  broadcast,low=1,high=4194302  "
-        "(CIDR is expanded to the subnet directed broadcast)"
+        "(CIDR → subnet directed broadcast; requires direct LAN access or BBMD — "
+        "will not discover over Tailscale/VPN without BBMD configuration)"
     ),
     "iec104.tcp": (
         "Examples: 10.0.0.5  |  10.0.0.5:2404  |  "

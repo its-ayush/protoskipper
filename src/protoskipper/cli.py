@@ -9,6 +9,7 @@ headless automation, CI integrations, and quick scans from a terminal.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 
@@ -64,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # Configure logging: show WARNING+ by default.  pymodbus logs a spurious
+    # ERROR for every TCP connection that fails during probing, so we silence
+    # it completely.  bacpypes3 and asyncio stay at WARNING so real issues are
+    # still surfaced.
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("pymodbus").setLevel(logging.CRITICAL)
 
     if args.command is None:
         parser.print_help()
