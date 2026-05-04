@@ -1255,11 +1255,14 @@ mirror P7.B.7.
 
 ### P7.F — Server / Device simulator (D4) 🔶 scaffold
 
-#### P7.F.1 Object model backed by points-list 🔶
+#### P7.F.1 Object model backed by points-list ✅
 
-> **Status:** Scaffold in `src/protoskipper/builtin_drivers/bacnet/simulator.py`.
-> Answers Who-Is/I-Am; serves AnalogInput and AnalogValue objects.
-> Full RPM/WP/COV support pending.
+> **Complete.** `BacnetSimulator` fully rewritten with all 9 object-type
+> factories (AI/AO/AV/BI/BO/BV/MSV/MSI/MSO), short-alias resolution, thread-safe
+> `update_value()` / `get_value()` via `concurrent.futures.Future`, and `threading.Event`
+> readiness gate (blocks `start_simulator()` until UDP socket bound, 10 s timeout).
+> Integration tests in `tests/integration/test_bacnet_ip_session.py` cover all object types,
+> alias expansion, value injection, and stop/restart lifecycle.
 
 #### P7.F.2 Schedule / Calendar evaluation ⬜
 
@@ -1309,7 +1312,13 @@ mirror P7.B.7.
 
 #### P7.I.2 Preferences extensions ⬜
 
-#### P7.I.3 Setup save/load (`bacnet-setup.json`) ⬜
+#### P7.I.3 Setup save/load (`bacnet-setup.json`) ✅
+
+> **Complete.** `src/protoskipper/builtin_drivers/bacnet/setup.py` implements
+> `BacnetSetup.save(path)` / `BacnetSetup.load(path)` with schema version guard,
+> nested dataclasses (`TransportConfig`, `WatchlistEntry`, `CovSubscription`,
+> `TrendLogSetup`, `DeviceSetup`, `BenchTile`), auto-timestamp on first save,
+> and no secrets in file. 29 unit tests in `tests/unit/test_bacnet_setup.py`.
 
 #### P7.I.4 GUI panels wiring 🔶
 
