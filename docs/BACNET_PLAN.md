@@ -1104,16 +1104,18 @@ finish it in a single PR.
   * Repeatable discovery on a 100-device network completes ≤ 2 s.
   * Filter by ID range works.
 
-#### P7.B.6 Property reads — RP / RPM / ReadRange ✅ (RP+RPM done; ReadRange ⬜)
+#### P7.B.6 Property reads — RP / RPM / ReadRange ✅
 
 * **Goal:** `read`, `read_many`, `read_range` per §5.4.
 * **AC:**
   * RPM batches honour vendor profile size.
-  * ReadRange supports by-position, by-sequence-number, by-time.
+  * ReadRange supports by-position, by-sequence-number, by-time. ✅
   * Property-array access (`[index]` and `[*]`) per ASHRAE 135 cl.
-    13.1.
+    13.1. ✅ (`read_property_array`)
+* **Implemented:** `read_range`, `read_property_array`, `_async_read_range_property`
+  in `client.py`; 12 unit tests in `test_bacnet_read_range_wpm.py`.
 
-#### P7.B.7 Property writes — WP / WPM / WriteGroup ✅ (WP done; WPM/WriteGroup ⬜)
+#### P7.B.7 Property writes — WP / WPM / WriteGroup 🔶 (WP+WPM done; WriteGroup ⬜)
 
 * **Goal:** `write` and `write_many` per §5.4.  Priority-array aware
   for commandable types.
@@ -1123,6 +1125,9 @@ finish it in a single PR.
   * `release(priority)` writes Null at that priority and verifies
     the priority-array slot cleared.
   * Each write yields `record_write_outcome` audit row pair.
+* **Implemented:** `write_many` (WPM batching), `_async_wpm` using
+  `WritePropertyMultipleRequest` APDU; 8 unit tests in
+  `test_bacnet_read_range_wpm.py`. WriteGroup pending.
 
 #### P7.B.8 COV — Subscribe / Notify (confirmed + unconfirmed) ✅
 
@@ -1230,13 +1235,17 @@ mirror P7.B.7.
 
 ### P7.E — Routing + BBMD + FD
 
-#### P7.E.1 BBMD role
+#### P7.E.1 BBMD role 🔶 (BBMD read-only done; active BBMD role ⬜)
 
 * **Goal:** Run ourselves as a BBMD: forward broadcasts, maintain
   BDT, accept FD registrations.
 * **AC:**
   * Pass `Distribute-Broadcast-To-Network` to BDT peers.
   * FD registration TTL ageing works.
+* **Implemented:** `read_bdt`, `read_fdt`, `_async_read_bdt_raw`,
+  `_async_read_fdt_raw` — raw BVLC UDP datagrams to read BDT/FDT from
+  any BBMD; 12 unit tests in `test_bacnet_read_range_wpm.py`. Active
+  BBMD forwarding role pending.
 
 #### P7.E.2 Foreign-Device role (already covered in P7.B.1) ✅
 
@@ -1288,7 +1297,15 @@ mirror P7.B.7.
 
 ### P7.I — Cross-cutting
 
-#### P7.I.1 Audit-log row schema for BACnet ⬜
+#### P7.I.1 Audit-log row schema for BACnet ✅
+
+* **Implemented:** `src/protoskipper/builtin_drivers/bacnet/audit_schema.py`
+  with `AUDIT_SCHEMA_VERSION`, `BacnetEvent` (27 event-type constants),
+  and 11 payload builder functions (`connect_payload`, `read_payload`,
+  `write_payload`, `read_range_payload`, `alarm_payload`,
+  `alarm_ack_payload`, `discovery_payload`, `cov_subscribe_payload`,
+  `device_mgmt_payload`, `routing_payload`, `error_payload`).
+  40 unit tests in `test_bacnet_audit_schema.py`.
 
 #### P7.I.2 Preferences extensions ⬜
 

@@ -470,6 +470,48 @@ class BacnetIpSession(DriverSession):
         return records
 
     # ------------------------------------------------------------------
+    # P7.B.6 — General ReadRange for any list property (async helper)
+    # ------------------------------------------------------------------
+
+    async def _async_read_range_property(
+        self,
+        object_id: str,
+        prop: str,
+        range_type: str,
+        first: int,
+        count: int,
+        date_str: str,
+        time_str: str,
+    ) -> list[Any]:
+        """ReadRange for any list/array property on any BACnet object.
+
+        Mirrors :meth:`_async_read_trend_log` but is not restricted to
+        ``logBuffer`` — *prop* may be any property that supports ReadRange
+        (e.g. ``logBuffer``, ``objectList``, ``statusLog``).
+        """
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import ObjectIdentifier, PropertyIdentifier
+
+        obj_type, instance = parse_object_id(object_id)
+        oid = ObjectIdentifier((obj_type, instance))
+        p = PropertyIdentifier(prop)
+        address = Address(self._remote_addr)
+        range_params = (range_type, first, date_str, time_str, count)
+
+        result = await self._app.read_range(address, oid, p, range_params=range_params)
+        if result is None or hasattr(result, "errorClass"):
+            return []
+
+        items: list[Any] = []
+        for item in result if hasattr(result, "__iter__") else []:
+            try:
+                items.append(bacnet_value_to_python(item))
+            except Exception:
+                with contextlib.suppress(Exception):
+                    items.append(str(item))
+        return items
+
+    # ------------------------------------------------------------------
     # P7.B.12 — File services (async helpers)
     # ------------------------------------------------------------------
 
@@ -614,6 +656,190 @@ class BacnetIpSession(DriverSession):
         request = DeviceCommunicationControlRequest(**kwargs)
         request.pduDestination = Address(self._remote_addr)
         await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.B.7 — WritePropertyMultiple (async helper)
+    # ------------------------------------------------------------------
+
+    async def _async_wpm(
+        self,
+        writes: list[tuple[str, str, Any, int | None]],
+    ) -> None:
+        """WritePropertyMultiple — transmit all (objid, prop, value, priority) tuples
+        in a single confirmed-request APDU.
+
+        *value* in each tuple must already be a bacpypes3 primitive type (as
+        returned by :func:`python_to_bacnet_value`).
+        """
+        from bacpypes3.apdu import (
+            PropertyValue as BACnetPropertyValue,
+        )
+        from bacpypes3.apdu import (
+            WriteAccessSpecification,
+            WritePropertyMultipleRequest,
+        )
+        from bacpypes3.basetypes import PropertyIdentifier
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import ObjectIdentifier, Unsigned
+
+        access_specs = []
+        for objid, prop, bac_val, priority in writes:
+            obj_type, instance = parse_object_id(objid)
+            oid = ObjectIdentifier((obj_type, instance))
+            pv = BACnetPropertyValue(
+                propertyIdentifier=PropertyIdentifier(prop),
+                value=bac_val,
+            )
+            if priority is not None:
+                pv.priority = Unsigned(priority)
+            access_specs.append(
+                WriteAccessSpecification(
+                    objectIdentifier=oid,
+                    listOfProperties=[pv],
+                )
+            )
+
+        request = WritePropertyMultipleRequest(listOfWriteAccessSpecs=access_specs)
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.E — BBMD / FD routing — raw BVLC reads (async helpers)
+    # ------------------------------------------------------------------
+
+    async def _async_read_bdt_raw(
+        self,
+        bbmd_addr: str,
+        timeout: float = 3.0,
+    ) -> list[dict[str, Any]]:
+        """Send Read-BDT BVLC message to *bbmd_addr* and return parsed entries.
+
+        Returns a list of dicts with key ``"address"`` (string form of each
+        BDT IPv4Address).  Sends a raw UDP datagram so no existing socket is
+        disturbed.
+        """
+        import socket as _socket
+
+        from bacpypes3.ipv4.bvll import (
+            LPCI,
+            ReadBroadcastDistributionTableAck,
+            pdu_types,
+        )
+        from bacpypes3.pdu import PDU
+
+        host, _, port_str = bbmd_addr.partition(":")
+        port = int(port_str) if port_str else 47808
+
+        # Encode: 0x81 (BACnet/IP) 0x02 (Read-BDT) 0x00 0x04 (length)
+        request_bytes = bytes([0x81, 0x02, 0x00, 0x04])
+
+        loop = asyncio.get_event_loop()
+        result_future: asyncio.Future[bytes] = loop.create_future()
+
+        class _Proto(asyncio.DatagramProtocol):
+            def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+                transport.sendto(request_bytes, (host, port))
+
+            def datagram_received(self, data: bytes, addr: tuple) -> None:
+                if not result_future.done() and len(data) >= 4 and data[0] == 0x81:
+                    result_future.set_result(data)
+
+            def error_received(self, exc: Exception) -> None:
+                if not result_future.done():
+                    result_future.set_exception(exc)
+
+            def connection_lost(self, exc: Exception | None) -> None:
+                if not result_future.done():
+                    result_future.cancel()
+
+        transport, _ = await loop.create_datagram_endpoint(
+            _Proto,
+            local_addr=("0.0.0.0", 0),
+            family=_socket.AF_INET,
+        )
+        try:
+            raw = await asyncio.wait_for(asyncio.shield(result_future), timeout=timeout)
+        finally:
+            transport.close()
+
+        pdu = PDU(raw)
+        lpci = LPCI.decode(pdu)
+        lpdu_class = pdu_types.get(lpci.bvlciFunction)
+        if lpdu_class is None or lpdu_class is not ReadBroadcastDistributionTableAck:
+            return []
+        ack = lpdu_class.decode(pdu)
+        return [{"address": str(entry)} for entry in (getattr(ack, "bvlciBDT", None) or [])]
+
+    async def _async_read_fdt_raw(
+        self,
+        bbmd_addr: str,
+        timeout: float = 3.0,
+    ) -> list[dict[str, Any]]:
+        """Send Read-FDT BVLC message to *bbmd_addr* and return parsed entries.
+
+        Returns a list of dicts with keys ``"address"``, ``"ttl"``,
+        ``"remaining"`` (seconds) for each registered foreign device.
+        """
+        import socket as _socket
+
+        from bacpypes3.ipv4.bvll import (
+            LPCI,
+            ReadForeignDeviceTableAck,
+            pdu_types,
+        )
+        from bacpypes3.pdu import PDU
+
+        host, _, port_str = bbmd_addr.partition(":")
+        port = int(port_str) if port_str else 47808
+
+        # Encode: 0x81 (BACnet/IP) 0x06 (Read-FDT) 0x00 0x04 (length)
+        request_bytes = bytes([0x81, 0x06, 0x00, 0x04])
+
+        loop = asyncio.get_event_loop()
+        result_future: asyncio.Future[bytes] = loop.create_future()
+
+        class _Proto(asyncio.DatagramProtocol):
+            def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+                transport.sendto(request_bytes, (host, port))
+
+            def datagram_received(self, data: bytes, addr: tuple) -> None:
+                if not result_future.done() and len(data) >= 4 and data[0] == 0x81:
+                    result_future.set_result(data)
+
+            def error_received(self, exc: Exception) -> None:
+                if not result_future.done():
+                    result_future.set_exception(exc)
+
+            def connection_lost(self, exc: Exception | None) -> None:
+                if not result_future.done():
+                    result_future.cancel()
+
+        transport, _ = await loop.create_datagram_endpoint(
+            _Proto,
+            local_addr=("0.0.0.0", 0),
+            family=_socket.AF_INET,
+        )
+        try:
+            raw = await asyncio.wait_for(asyncio.shield(result_future), timeout=timeout)
+        finally:
+            transport.close()
+
+        pdu = PDU(raw)
+        lpci = LPCI.decode(pdu)
+        lpdu_class = pdu_types.get(lpci.bvlciFunction)
+        if lpdu_class is None or lpdu_class is not ReadForeignDeviceTableAck:
+            return []
+        ack = lpdu_class.decode(pdu)
+        entries = []
+        for fdte in getattr(ack, "bvlciFDT", None) or []:
+            entries.append(
+                {
+                    "address": str(getattr(fdte, "fdAddress", "?")),
+                    "ttl": int(getattr(fdte, "fdTTL", 0)),
+                    "remaining": int(getattr(fdte, "fdRemain", 0)),
+                }
+            )
+        return entries
 
     # ------------------------------------------------------------------
     # DriverSession ABC
@@ -936,6 +1162,74 @@ class BacnetIpSession(DriverSession):
         except Exception as exc:
             raise ProtocolError(f"ReadRange (TrendLog) failed for {ref.object_id}: {exc}") from exc
 
+    def read_range(
+        self,
+        ref: ObjectRef,
+        prop: str = "logBuffer",
+        *,
+        range_type: str = "p",
+        first: int = 1,
+        count: int = 100,
+        date_str: str = "2000-01-01",
+        time_str: str = "00:00:00",
+    ) -> list[Any]:
+        """General ReadRange for any list property of a BACnet object.
+
+        *prop* defaults to ``"logBuffer"`` (TrendLog / EventLog log buffer).
+        *range_type* is:
+
+        * ``'p'`` — by position (*first* = 1-based record index, positive
+          selects from start, negative from end)
+        * ``'s'`` — by sequence number (*first* = sequence number)
+        * ``'t'`` — by time (*date_str* ``YYYY-MM-DD`` + *time_str*
+          ``HH:MM:SS`` mark start; *count* limits records returned)
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_range_property(
+                    ref.object_id,
+                    prop,
+                    range_type=range_type,
+                    first=first,
+                    count=count,
+                    date_str=date_str,
+                    time_str=time_str,
+                ),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"ReadRange failed for {ref.object_id}.{prop}: {exc}") from exc
+
+    def read_property_array(
+        self,
+        ref: ObjectRef,
+        prop: str,
+        *,
+        array_index: int | None = None,
+    ) -> Any:
+        """Read a property or a single element from a BACnet array property.
+
+        * ``array_index=None`` — read the entire property (no array index tag).
+        * ``array_index=0`` — read the array length (Unsigned).
+        * ``array_index=N`` (N ≥ 1) — read element N of the array.
+
+        Example: ``read_property_array(ref, "objectList", array_index=0)``
+        returns the number of objects in the device's objectList.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_property(ref.object_id, prop, array_index),
+                timeout=self._apdu_timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(
+                f"ReadProperty {ref.object_id}.{prop}[{array_index}] failed: {exc}"
+            ) from exc
+
     # ------------------------------------------------------------------
     # P7.B.11 — Schedule & Calendar (public API)
     # ------------------------------------------------------------------
@@ -1136,6 +1430,118 @@ class BacnetIpSession(DriverSession):
             raise ProtocolError(
                 f"DeviceCommunicationControl failed (mode={enable_disable}): {exc}"
             ) from exc
+
+    # ------------------------------------------------------------------
+    # P7.B.7 — WritePropertyMultiple (public API)
+    # ------------------------------------------------------------------
+
+    def write_many(
+        self,
+        intents: list[WriteIntent],
+    ) -> list[WriteResult]:
+        """Batch-write properties using WritePropertyMultiple (single APDU).
+
+        Every intent must have been produced by :meth:`prepare_write`.  All
+        are safety-gated before transmission.  WPM is all-or-nothing (the
+        device either applies all writes or returns an error), so the returned
+        :class:`WriteResult` list has all entries sharing the same
+        success/failure status.
+        """
+        if not intents:
+            return []
+
+        ts = datetime.now(tz=timezone.utc)
+
+        # Safety gate — check every intent before touching the wire
+        for intent in intents:
+            if not self.safety.require_write_authorization(intent):
+                raise WriteAuthorizationError(
+                    f"write_many denied for {intent.object_ref.object_id}"
+                )
+
+        writes: list[tuple[str, str, Any, int | None]] = [
+            (
+                i.object_ref.object_id,
+                i.metadata.get("prop", "presentValue"),
+                i.metadata.get("bacnet_value", i.requested_value),
+                i.metadata.get("priority"),
+            )
+            for i in intents
+        ]
+
+        try:
+            self._loop_thread.submit(
+                self._async_wpm(writes),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            results = [
+                WriteResult(intent=i, success=False, timestamp=ts, error="APDU timeout")
+                for i in intents
+            ]
+            for r in results:
+                self.safety.record_write_outcome(r)
+            raise
+        except Exception as exc:
+            results = [
+                WriteResult(intent=i, success=False, timestamp=ts, error=str(exc)) for i in intents
+            ]
+            for r in results:
+                self.safety.record_write_outcome(r)
+            raise ProtocolError(f"WritePropertyMultiple failed: {exc}") from exc
+
+        results = [WriteResult(intent=i, success=True, timestamp=ts) for i in intents]
+        for r in results:
+            self.safety.record_write_outcome(r)
+        return results
+
+    # ------------------------------------------------------------------
+    # P7.E — BBMD / FD routing (public API)
+    # ------------------------------------------------------------------
+
+    def read_bdt(
+        self,
+        bbmd_addr: str,
+        *,
+        timeout: float = 3.0,
+    ) -> list[dict[str, Any]]:
+        """Read the Broadcast Distribution Table from a BBMD.
+
+        *bbmd_addr* is ``"host:port"`` (port defaults to 47808).
+        Returns a list of dicts with key ``"address"`` for each BDT entry.
+        Sends a raw BVLC UDP datagram outside the active BACnet session socket.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_bdt_raw(bbmd_addr, timeout),
+                timeout=timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"Read-BDT from {bbmd_addr} failed: {exc}") from exc
+
+    def read_fdt(
+        self,
+        bbmd_addr: str,
+        *,
+        timeout: float = 3.0,
+    ) -> list[dict[str, Any]]:
+        """Read the Foreign Device Table from a BBMD.
+
+        *bbmd_addr* is ``"host:port"`` (port defaults to 47808).
+        Returns a list of dicts with keys ``"address"``, ``"ttl"``,
+        ``"remaining"`` for each registered foreign device.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_fdt_raw(bbmd_addr, timeout),
+                timeout=timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"Read-FDT from {bbmd_addr} failed: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Session lifecycle
