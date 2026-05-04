@@ -45,7 +45,9 @@ from protoskipper.core.driver import (
     WriteIntent,
     WriteResult,
 )
-from protoskipper.core.errors import EncodingError
+from protoskipper.core.errors import ConnectionFailure, EncodingError
+
+from protoskipper_iec61850._mms_client import MmsClient, MmsConnectError
 
 __all__ = ["Iec61850MmsDriver", "Iec61850MmsSession"]
 
@@ -67,12 +69,24 @@ _ADDRESS_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 
-class Iec61850MmsDriver(ProtocolDriver):
-    """ProtoSkipper driver for IEC 61850 MMS (ISO 9506 over TCP/102).
+def _host_port_from_address(address: str) -> tuple[str, int]:
+    """Extract ``(host, port)`` from a normalised :class:`DeviceRef` address.
 
-    Phase 8 scaffold — all live operations raise :class:`NotImplementedError`
-    until the corresponding P8.B.x tasks are completed.
+    The address has already been through :meth:`Iec61850MmsDriver.parse_address`
+    so it is guaranteed to be ``host:port[?query]``.
     """
+    base = address.split("?")[0]
+    host, _, port_str = base.rpartition(":")
+    return host, int(port_str)
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+
+class Iec61850MmsDriver(ProtocolDriver):
+    """ProtoSkipper driver for IEC 61850 MMS (ISO 9506 over TCP/102)."""
 
     PROTOCOL_ID: ClassVar[str] = "iec61850.mms"
     DISPLAY_NAME: ClassVar[str] = "IEC 61850 (MMS)"
@@ -119,15 +133,23 @@ class Iec61850MmsDriver(ProtocolDriver):
         device: DeviceRef,
         safety: SafetyContext,
     ) -> Iec61850MmsSession:
-        """Open an MMS session to ``device``.
+        """Open an MMS Initiate exchange and return a live session.
 
-        .. note::
-            Not yet implemented (P8.B.2).
+        Raises
+        ------
+        ImportError
+            If ``pyiec61850`` is not installed (see build instructions in
+            ``docs/internal/IEC61850_MMS_LIBRARY.md``).
+        ConnectionFailure
+            If the MMS Initiate is rejected or times out.
         """
-        raise NotImplementedError(
-            "IEC 61850 MMS connect is not yet implemented.  "
-            "See P8.B.2 in docs/internal/EXECUTION_PLAN.md."
-        )
+        host, port = _host_port_from_address(device.address)
+        client = MmsClient(host, port)
+        try:
+            client.connect()
+        except MmsConnectError as exc:
+            raise ConnectionFailure(str(exc)) from exc
+        return Iec61850MmsSession(device=device, safety=safety, client=client)
 
 
 # ---------------------------------------------------------------------------
@@ -136,18 +158,30 @@ class Iec61850MmsDriver(ProtocolDriver):
 
 
 class Iec61850MmsSession(DriverSession):
-    """An open IEC 61850 MMS connection to a single IED.
+    """An open IEC 61850 MMS connection to a single IED."""
 
-    Phase 8 scaffold — all methods raise :class:`NotImplementedError`.
-    """
-
-    # Populated by the real implementation (P8.B.2).
     device: DeviceRef
     safety: SafetyContext
 
-    def __init__(self, device: DeviceRef, safety: SafetyContext) -> None:
+    def __init__(
+        self,
+        device: DeviceRef,
+        safety: SafetyContext,
+        client: MmsClient | None = None,
+    ) -> None:
         self.device = device
         self.safety = safety
+        self._client = client
+
+    @property
+    def negotiated_pdu_size(self) -> int:
+        """Maximum PDU size negotiated in MMS Initiate (0 if unavailable)."""
+        return self._client.negotiated_pdu_size if self._client else 0
+
+    @property
+    def peer_implementation(self) -> str:
+        """Peer implementation string from MMS Initiate response."""
+        return self._client.peer_implementation if self._client else ""
 
     def enumerate_objects(self) -> Iterator[ObjectRef]:
         """Discover the IED data model.
@@ -195,8 +229,7 @@ class Iec61850MmsSession(DriverSession):
         )
 
     def close(self) -> None:
-        """Release MMS transport resources.
-
-        .. note::
-            Not yet implemented (P8.B.2).  No-op at scaffold stage.
-        """
+        """Send MMS Close and release all transport resources."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None

@@ -24,9 +24,13 @@ dependencies = [
 
 [project.optional-dependencies]
 mms = [
-    # python-iec61850 (libiec61850 SWIG binding) or pure-Python alternative.
+    # pyiec61850 (libiec61850 SWIG binding) — must be built from source.
+    # No PyPI wheel exists.  One-time build per environment:
+    #   git clone https://github.com/mz-automation/libiec61850
+    #   cmake -DBUILD_PYTHON_BINDINGS=ON .. && make && sudo make install
     # See docs/internal/IEC61850_MMS_LIBRARY.md for the decision record.
-    # Intentionally left open until P8.B.1 is resolved.
+    # Intentionally not listed as a pip dependency; _mms_client.py guards
+    # the import and raises ImportError with build instructions when absent.
 ]
 goose = [
     # raw-socket access — scapy or a custom AF_PACKET / BPF wrapper.

@@ -1,5 +1,5 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
-"""Unit tests for the IEC 61850 plugin — P8.A.1 contract verification.
+"""Unit tests for the IEC 61850 plugin — P8.A.1 / P8.B.2 contract verification.
 
 Tests verify that:
 * The plugin package imports cleanly.
@@ -8,9 +8,13 @@ Tests verify that:
   plugin is installed.
 * ``parse_address`` accepts valid addresses and rejects invalid ones.
 * ``discover`` is a generator that yields nothing (scaffold stage).
-* ``connect`` raises ``NotImplementedError`` with a helpful message.
-* ``Iec61850MmsSession`` stubs raise ``NotImplementedError`` with a note
-  pointing to the relevant plan task.
+* ``connect`` (P8.B.2):
+  - raises ``ImportError`` (with build instructions) when pyiec61850 is absent.
+  - raises ``ConnectionFailure`` when MMS Initiate is refused.
+  - returns a live :class:`Iec61850MmsSession` on success.
+* :class:`Iec61850MmsSession` exposes ``negotiated_pdu_size`` and
+  ``peer_implementation``; ``close()`` delegates to ``MmsClient.close()``.
+* Session stubs for P8.B.3-P8.B.5 raise ``NotImplementedError``.
 """
 
 from __future__ import annotations
@@ -141,29 +145,100 @@ class TestDiscover:
 
 
 # ---------------------------------------------------------------------------
-# P8.A.1 — connect raises NotImplementedError (scaffold)
+# P8.B.2 — connect
 # ---------------------------------------------------------------------------
 
 
 class TestConnect:
-    def test_connect_raises_not_implemented(self) -> None:
+    @pytest.fixture
+    def driver(self):  # type: ignore[no-untyped-def]
         from protoskipper_iec61850.driver import Iec61850MmsDriver
 
+        return Iec61850MmsDriver()
+
+    @pytest.fixture
+    def device_ref(self, driver):  # type: ignore[no-untyped-def]
+        return driver.parse_address("10.0.0.1")
+
+    @pytest.fixture
+    def safety(self):  # type: ignore[no-untyped-def]
         from protoskipper.core.driver import SafetyContext, SessionProfile
 
-        driver = Iec61850MmsDriver()
-        ref = driver.parse_address("10.0.0.1")
-        safety = SafetyContext(
+        return SafetyContext(
             profile=SessionProfile.LAB,
             confirm_callback=lambda i, p: True,
             audit_callback=lambda **_kw: None,
         )
-        with pytest.raises(NotImplementedError, match=r"P8\.B\.2"):
-            driver.connect(ref, safety)
+
+    def test_connect_raises_import_error_when_library_absent(
+        self, driver, device_ref, safety
+    ) -> None:
+        """When pyiec61850 is not installed, connect propagates ImportError."""
+        from unittest.mock import patch
+
+        with (
+            patch(
+                "protoskipper_iec61850._mms_client._require_pyiec61850",
+                side_effect=ImportError("pyiec61850 not installed"),
+            ),
+            pytest.raises(ImportError, match="pyiec61850"),
+        ):
+            driver.connect(device_ref, safety)
+
+    def test_connect_raises_connection_failure_on_mms_error(
+        self, driver, device_ref, safety
+    ) -> None:
+        """MmsConnectError from MmsClient is re-raised as ConnectionFailure."""
+        from unittest.mock import MagicMock, patch
+
+        from protoskipper_iec61850._mms_client import MmsConnectError
+
+        from protoskipper.core.errors import ConnectionFailure
+
+        mock_client = MagicMock()
+        mock_client.connect.side_effect = MmsConnectError("connection refused", error_code=32768)
+        with (
+            patch("protoskipper_iec61850.driver.MmsClient", return_value=mock_client),
+            pytest.raises(ConnectionFailure, match="connection refused"),
+        ):
+            driver.connect(device_ref, safety)
+
+    def test_connect_returns_session_on_success(self, driver, device_ref, safety) -> None:
+        """Successful connect returns an Iec61850MmsSession with client properties."""
+        from unittest.mock import MagicMock, patch
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        mock_client = MagicMock()
+        mock_client.connect.return_value = None
+        mock_client.negotiated_pdu_size = 65000
+        mock_client.peer_implementation = "libiec61850/1.6"
+
+        with patch("protoskipper_iec61850.driver.MmsClient", return_value=mock_client):
+            session = driver.connect(device_ref, safety)
+
+        assert isinstance(session, Iec61850MmsSession)
+        assert session.negotiated_pdu_size == 65000
+        assert session.peer_implementation == "libiec61850/1.6"
+
+    def test_connect_uses_host_and_port_from_device_ref(self, driver, safety) -> None:
+        """MmsClient is instantiated with the host and port from DeviceRef."""
+        from unittest.mock import MagicMock, patch
+
+        mock_client = MagicMock()
+        mock_client.connect.return_value = None
+        mock_client.negotiated_pdu_size = 0
+        mock_client.peer_implementation = ""
+
+        device_ref = driver.parse_address("10.0.0.5:1002")
+        with patch("protoskipper_iec61850.driver.MmsClient", return_value=mock_client) as mock_cls:
+            driver.connect(device_ref, safety)
+
+        mock_cls.assert_called_once_with("10.0.0.5", 1002)
 
 
 # ---------------------------------------------------------------------------
-# P8.A.1 — session stubs raise NotImplementedError
+# P8.B.2 / P8.B.3-P8.B.5 — session stubs and close
 # ---------------------------------------------------------------------------
 
 
@@ -180,7 +255,7 @@ class TestSessionStubs:
             confirm_callback=lambda i, p: True,
             audit_callback=lambda **_kw: None,
         )
-        return Iec61850MmsSession(device=device, safety=safety)
+        return Iec61850MmsSession(device=device, safety=safety)  # no client
 
     def test_enumerate_objects_raises(self, session) -> None:  # type: ignore[no-untyped-def]
         with pytest.raises(NotImplementedError, match=r"P8\.B\.3"):
@@ -225,5 +300,50 @@ class TestSessionStubs:
         with pytest.raises(NotImplementedError, match=r"P8\.B\.5"):
             session.commit_write(intent)
 
-    def test_close_is_noop(self, session) -> None:  # type: ignore[no-untyped-def]
+    def test_close_is_noop_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
         session.close()  # must not raise
+
+    def test_close_delegates_to_client(self) -> None:
+        """close() calls MmsClient.close() exactly once."""
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext, SessionProfile
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = SafetyContext(
+            profile=SessionProfile.LAB,
+            confirm_callback=lambda i, p: True,
+            audit_callback=lambda **_kw: None,
+        )
+        mock_client = MagicMock()
+        session = Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+        session.close()
+        mock_client.close.assert_called_once()
+
+    def test_double_close_is_safe(self) -> None:
+        """close() called twice does not call MmsClient.close() a second time."""
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext, SessionProfile
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = SafetyContext(
+            profile=SessionProfile.LAB,
+            confirm_callback=lambda i, p: True,
+            audit_callback=lambda **_kw: None,
+        )
+        mock_client = MagicMock()
+        session = Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+        session.close()
+        session.close()
+        mock_client.close.assert_called_once()
+
+    def test_negotiated_pdu_size_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
+        assert session.negotiated_pdu_size == 0
+
+    def test_peer_implementation_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
+        assert session.peer_implementation == ""
