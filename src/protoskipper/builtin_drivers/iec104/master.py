@@ -51,6 +51,18 @@ from protoskipper.builtin_drivers.iec104.apci import (
     seq_inc,
 )
 from protoskipper.builtin_drivers.iec104.asdu import COT, Asdu, TypeID
+from protoskipper.builtin_drivers.iec104.file_transfer import (
+    DirectoryEntry,
+    build_ack_file,
+    build_ack_section,
+    build_call_directory,
+    build_call_section,
+    build_select_file,
+    parse_directory_entries,
+    parse_file_ready,
+    parse_last_section,
+    parse_segment,
+)
 from protoskipper.core.errors import ConnectionFailure, ProtoSkipperError
 
 _logger = logging.getLogger(__name__)
@@ -470,6 +482,135 @@ class Iec104MasterSession:
             raise ConnectionFailure("Clock sync ACTCON not received within t1")
         return replies[0]
 
+    # ------------------------------------------------------------------
+    # File transfer services (§P4.B.8)
+    # ------------------------------------------------------------------
+
+    def browse_files(self, timeout: float | None = None) -> list[DirectoryEntry]:
+        """Send F_SC_NA_1 call-directory and collect F_DR_TA_1 responses.
+
+        Returns a list of :class:`DirectoryEntry` items describing the files
+        held by the RTU.  Blocks until the slave stops sending directory
+        entries (no more F_DR_TA_1 arrives within *timeout* seconds).
+        """
+        ca = self._cfg.ca
+        entries_raw: list[Asdu] = []
+        ev = threading.Event()
+        # We collect all F_DR_TA_1 entries; the terminator is a timeout
+        # (the standard has no explicit EOT for directory responses).
+
+        def predicate(a: Asdu) -> bool:
+            return a.ca == ca and a.type_id is TypeID.F_DR_TA_1
+
+        req = PendingRequest(predicate=predicate, replies=entries_raw, event=ev, multi=True)
+        with self._state_lock:
+            self._pending.append(req)
+        body = asdu.encode_asdu(build_call_directory(ca))
+        self._send_i(body)
+        wait_t = timeout if timeout is not None else self._cfg.t1
+        # Wait for at least one entry or timeout
+        ev.wait(timeout=wait_t)
+        self._cancel_pending(req)
+        result: list[DirectoryEntry] = []
+        for a in entries_raw:
+            result.extend(parse_directory_entries(a))
+        return result
+
+    def download_file(
+        self,
+        name_ioa: int,
+        *,
+        timeout: float | None = None,
+    ) -> bytes:
+        """Download a file by IOA from the RTU.
+
+        Sends F_SC_NA_1 select → waits for F_FR_NA_1 → requests section →
+        collects F_SG_NA_1 segments → sends acks → returns complete payload.
+
+        All pending-request handlers are registered **before** sending the
+        corresponding request to eliminate the race between the receive thread
+        and the caller thread.
+
+        Raises :class:`FileDownloadError` on protocol errors and
+        :class:`ConnectionFailure` on timeout.
+        """
+        ca = self._cfg.ca
+        wait_t = timeout if timeout is not None else 30.0
+
+        # ------------------------------------------------------------------ #
+        # Pre-register a handler for the entire section exchange.             #
+        # It collects F_SR_NA_1 (section ready), F_SG_NA_1 (segments), and   #
+        # F_LS_NA_1 (last section/file) in a single multi-reply list.  The   #
+        # terminator fires on F_LS_NA_1, which signals end-of-section.        #
+        # ------------------------------------------------------------------ #
+        _section_tids = (TypeID.F_SR_NA_1, TypeID.F_SG_NA_1, TypeID.F_LS_NA_1)
+
+        section_replies: list[Asdu] = []
+        section_ev = threading.Event()
+
+        def _section_pred(a: Asdu) -> bool:
+            return a.ca == ca and a.type_id in _section_tids
+
+        def _section_term(a: Asdu) -> bool:
+            return a.type_id is TypeID.F_LS_NA_1
+
+        section_req = PendingRequest(
+            predicate=_section_pred,
+            replies=section_replies,
+            event=section_ev,
+            multi=True,
+            terminator=_section_term,
+        )
+
+        # Also pre-register the F_FR_NA_1 (file-ready) handler.
+        fr_replies: list[Asdu] = []
+        fr_ev = threading.Event()
+
+        def _fr_pred(a: Asdu) -> bool:
+            return a.ca == ca and a.type_id is TypeID.F_FR_NA_1
+
+        fr_req = PendingRequest(predicate=_fr_pred, replies=fr_replies, event=fr_ev)
+
+        with self._state_lock:
+            self._pending.append(fr_req)
+            self._pending.append(section_req)
+
+        # 1. Select file (F_FR_NA_1 will arrive after this)
+        self._send_i(asdu.encode_asdu(build_select_file(ca, name_ioa)))
+
+        # 2. Wait for F_FR_NA_1
+        if not fr_ev.wait(timeout=wait_t):
+            self._cancel_pending(fr_req)
+            self._cancel_pending(section_req)
+            raise ConnectionFailure(
+                f"Timeout waiting for F_FR_NA_1 during file download IOA={name_ioa}"
+            )
+        _, _total_length = parse_file_ready(fr_replies[0])
+
+        # 3. Request section 1 (F_SR_NA_1 + segments + F_LS_NA_1 will follow)
+        self._send_i(asdu.encode_asdu(build_call_section(ca, name_ioa, section=1)))
+
+        # 4. Wait for F_LS_NA_1 (section_req terminator fires when it arrives)
+        if not section_ev.wait(timeout=wait_t):
+            self._cancel_pending(section_req)
+            raise ConnectionFailure(f"Timeout collecting segments for file IOA={name_ioa}")
+
+        # 5. Process all buffered section ASDUs in order
+        payload_chunks: list[bytes] = []
+        for a in section_replies:
+            if a.type_id is TypeID.F_SG_NA_1:
+                _, _, chunk = parse_segment(a)
+                payload_chunks.append(chunk)
+            elif a.type_id is TypeID.F_LS_NA_1:
+                _, _, _file_done = parse_last_section(a)
+                self._send_i(asdu.encode_asdu(build_ack_section(ca, name_ioa)))
+                break
+
+        # 6. Ack file
+        self._send_i(asdu.encode_asdu(build_ack_file(ca, name_ioa)))
+
+        return b"".join(payload_chunks)
+
     def _issue_command(
         self,
         body: bytes,
@@ -563,6 +704,39 @@ class Iec104MasterSession:
     # ------------------------------------------------------------------
 
     def _receive_loop(self) -> None:
+        """Outer reconnect wrapper.  Calls _recv_session; retries when
+        ``auto_reconnect`` is enabled and the stop flag is not set."""
+        while not self._stop.is_set():
+            self._recv_session()
+            if self._stop.is_set() or not self._cfg.auto_reconnect:
+                break
+            _logger.info(
+                "Connection to %s:%d lost; reconnecting in %.1fs",
+                self._cfg.host,
+                self._cfg.port,
+                self._cfg.reconnect_delay,
+            )
+            deadline = time.monotonic() + self._cfg.reconnect_delay
+            while time.monotonic() < deadline:
+                if self._stop.is_set():
+                    break
+                time.sleep(0.05)
+            if self._stop.is_set():
+                break
+            try:
+                self._do_reconnect()
+            except Exception as exc:
+                _logger.warning(
+                    "Reconnect to %s:%d failed: %s; will retry after %.1fs",
+                    self._cfg.host,
+                    self._cfg.port,
+                    exc,
+                    self._cfg.reconnect_delay,
+                )
+
+    def _recv_session(self) -> None:
+        """Inner receive loop for a single TCP session.  Fails all pending
+        requests on the way out so callers can observe the disconnect."""
         buf = bytearray()
         try:
             while not self._stop.is_set():
@@ -614,6 +788,48 @@ class Iec104MasterSession:
                 for req in self._pending:
                     req.event.set()
                 self._pending.clear()
+
+    def _do_reconnect(self) -> None:
+        """Close the dead socket, reset protocol state, open a fresh TCP/TLS
+        connection, and send STARTDT_ACT.  The next ``_recv_session`` call
+        will process STARTDT_CON and resume normal operation."""
+        old_sock = self._sock
+        self._sock = None
+        if old_sock is not None:
+            with contextlib.suppress(OSError):
+                old_sock.close()
+        # Reset sliding-window and timer state for the new session.
+        self._ns = 0
+        self._nr = 0
+        self._ack_sent = 0
+        self._unacked_received = 0
+        self._test_outstanding = False
+        self._last_rx_time = time.monotonic()
+        self._last_tx_time = time.monotonic()
+        self._oldest_unacked_send_time = 0.0
+        # Open new connection.
+        raw_sock = socket.create_connection(
+            (self._cfg.host, self._cfg.port),
+            timeout=self._cfg.t0,
+        )
+        if self._cfg.tls:
+            ctx = self._cfg.tls_context or ssl.create_default_context()
+            try:
+                new_sock: socket.socket = ctx.wrap_socket(
+                    raw_sock,
+                    server_hostname=self._cfg.tls_server_hostname or self._cfg.host,
+                )
+            except (ssl.SSLError, OSError) as exc:
+                with contextlib.suppress(OSError):
+                    raw_sock.close()
+                raise ConnectionFailure(f"IEC104 TLS reconnect failed: {exc}") from exc
+        else:
+            new_sock = raw_sock
+        new_sock.settimeout(0.5)
+        self._sock = new_sock
+        self._connected.set()
+        # STARTDT_CON will be processed by the next _recv_session iteration.
+        self._send_u(UType.STARTDT_ACT)
 
     def _tick_timers(self) -> None:
         now = time.monotonic()

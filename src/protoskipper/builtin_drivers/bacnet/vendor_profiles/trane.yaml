@@ -1,0 +1,34 @@
+id: trane_tracer
+display_name: "Trane Tracer SC / Summit / Ensemble"
+vendor_id: 16
+quirks:
+  - no-cov
+default_apdu_timeout_ms: 10000
+rpm_batch_size: 8
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 135
+    name: "TRN-Algorithm"
+    description: "Trane Tracer algorithm control object"
+  - type_id: 136
+    name: "TRN-Setpoint"
+    description: "Trane proprietary setpoint object"
+proprietary_properties:
+  - property_id: 9001
+    name: "TRN-Alarm-State"
+    object_types: ["analog-input", "analog-value"]
+    data_type: "enumerated"
+    description: "Trane proprietary alarm state extension"
+  - property_id: 9002
+    name: "TRN-Loop-Output"
+    object_types: ["loop"]
+    data_type: "real"
+    description: "Trane loop output proprietary property"
+notes: |
+  Trane Tracer SC/Summit devices use vendor_id 16.
+  COV subscriptions are not reliably supported on all Trane models;
+  prefer polling for point monitoring.
+  Tracer SC+ and Ensemble are newer and generally more standards-compliant.
+  APDU timeouts should be generous (10 s) for Tracer SC on slow networks.
+  RPM batch size of 8 avoids message fragmentation issues on older firmware.

@@ -1,0 +1,13 @@
+id: generic
+display_name: "Generic BACnet Device"
+vendor_id: null
+quirks: []
+proprietary_object_types: []
+proprietary_properties: []
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 16
+cov_lifetime_s: 300
+segmentation_supported: true
+notes: |
+  Used as the fallback when no vendor-specific profile matches.
+  Conservative timeouts and batch sizes ensure broad compatibility.

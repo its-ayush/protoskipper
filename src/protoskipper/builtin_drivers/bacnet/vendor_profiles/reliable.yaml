@@ -1,0 +1,21 @@
+id: reliable_controls
+display_name: "Reliable Controls MACH-Pro / RC-Studio"
+vendor_id: 107
+quirks: []
+default_apdu_timeout_ms: 5000
+rpm_batch_size: 25
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types: []
+proprietary_properties:
+  - property_id: 7201
+    name: "RC-Controller-Mode"
+    object_types: ["device"]
+    data_type: "enumerated"
+    description: "Reliable Controls controller operating mode"
+notes: |
+  Reliable Controls (vendor_id 107) MACH-Pro series controllers are
+  well-behaved BACnet/IP devices.
+  High RPM batch size (25+) is supported without issues.
+  Low APDU timeout (5 s) is sufficient on LAN segments.
+  RC-Studio BAS software uses BACnet/IP for all communications.

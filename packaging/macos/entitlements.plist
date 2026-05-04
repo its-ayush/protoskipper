@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- packaging/macos/entitlements.plist
+     Minimal hardened-runtime entitlements for ProtoSkipper.
+     Used by build_dmg.sh when codesigning. -->
+<plist version="1.0">
+<dict>
+    <!-- Allow just-in-time compilation (PySide6 / QtWebEngine may need this) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Allow unsigned executable memory (PyInstaller bootloader requirement) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Allow DYLD environment variables (needed for bundled Qt libraries) -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Network client access (Modbus TCP, IEC 104, update checker) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Serial port access for RTU/serial connections -->
+    <key>com.apple.security.device.serial</key>
+    <true/>
+</dict>
+</plist>

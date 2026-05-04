@@ -55,6 +55,7 @@ from protoskipper.gui.dialogs import (
     Iec104CommandDialog,
     Iec104ConformanceDialog,
     Iec104DiffDialog,
+    Iec104FuzzerDialog,
     Iec104PcapViewerDialog,
     NewConnectionDialog,
     NewSlaveDialog,
@@ -315,6 +316,13 @@ class MainWindow(QMainWindow):
         self._action_iec104_conformance.triggered.connect(self._open_iec104_conformance_dialog)
         iec104_menu.addAction(self._action_iec104_conformance)
 
+        self._action_iec104_fuzzer = QAction(self.tr("Fuzzer\u2026"), self)
+        self._action_iec104_fuzzer.setToolTip(
+            "Launch the IEC 104 mutation fuzzer (LAB profile only)"
+        )
+        self._action_iec104_fuzzer.triggered.connect(self._open_iec104_fuzzer_dialog)
+        iec104_menu.addAction(self._action_iec104_fuzzer)
+
         iec104_menu.addSeparator()
 
         self._action_iec104_save_setup = QAction(self.tr("Save IEC\u00a0104 Setup\u2026"), self)
@@ -380,11 +388,16 @@ class MainWindow(QMainWindow):
         self._action_report_bug = QAction(self.tr("Report Bug\u2026"), self)
         self._action_report_bug.triggered.connect(self._open_report_bug)
 
+        self._action_check_updates = QAction(self.tr("Check for Updates\u2026"), self)
+        self._action_check_updates.triggered.connect(self._check_for_updates)
+
         help_menu = menu.addMenu("&Help")
         help_menu.addAction(self._action_keyboard_shortcuts)
         help_menu.addSeparator()
         help_menu.addAction(self._action_docs)
         help_menu.addAction(self._action_report_bug)
+        help_menu.addSeparator()
+        help_menu.addAction(self._action_check_updates)
         help_menu.addSeparator()
         help_menu.addAction(self._action_about)
 
@@ -1017,6 +1030,19 @@ class MainWindow(QMainWindow):
         )
         dlg.exec()
 
+    def _open_iec104_fuzzer_dialog(self) -> None:
+        """Tools → IEC 104 → Fuzzer… — open the mutation fuzzer panel."""
+        # Determine current profile: use the active session's profile if available,
+        # otherwise default to COMMISSIONING (locked out of fuzzer).
+        profile = SessionProfile.COMMISSIONING
+        sid = self._active_session_id()
+        if sid is not None:
+            info = self._state.session(sid)
+            if info is not None:
+                profile = info.profile
+        dlg = Iec104FuzzerDialog(profile=profile, parent=self)
+        dlg.exec()
+
     def _save_iec104_setup(self) -> None:
         """Tools → IEC 104 → Save IEC 104 Setup… — write an iec104-setup.json."""
         default_dir = str(Path.home() / ".protoskipper" / "setups")
@@ -1178,6 +1204,13 @@ class MainWindow(QMainWindow):
     def _open_report_bug(self) -> None:
         """Help → Report Bug… — opens the GitHub new-issue form."""
         QDesktopServices.openUrl(QUrl("https://github.com/datasailors/protoskipper/issues/new"))
+
+    def _check_for_updates(self) -> None:
+        """Help → Check for Updates… — polls GitHub releases API (P6.D.1)."""
+        from protoskipper.gui.dialogs.update_checker import UpdateCheckerDialog
+
+        dlg = UpdateCheckerDialog(self)
+        dlg.exec()
 
     # ---- P3.E.1 First-run welcome dialog --------------------------------
 

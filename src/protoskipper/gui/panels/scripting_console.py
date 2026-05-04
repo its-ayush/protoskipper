@@ -52,8 +52,8 @@ _logger = logging.getLogger(__name__)
 
 _BANNER = (
     f"ProtoSkipper Python Console (Python {sys.version.split()[0]})\n"
-    "Bindings: state, manager, sessions\n"
-    "Type help(state) or help(manager) for API docs.\n"
+    "Bindings: state, manager, sessions, iec104, modbus\n"
+    "Type help(iec104) or help(iec104.MasterSession) for IEC 104 API docs.\n"
 )
 
 _PROMPT_PS1 = ">>> "
@@ -111,10 +111,25 @@ class _ConsoleWorker(QObject):
         """Main loop — executed on the worker QThread."""
         self._running = True
 
+        # Build protocol scripting namespaces (allow_writes=True in the REPL
+        # because write safety is enforced by the SessionManager / SafetyContext).
+        _iec104_ns: object = None
+        _modbus_ns: object = None
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            from protoskipper.scripting import _make_iec104_ns
+
+            _iec104_ns = _make_iec104_ns(allow_writes=True)
+        with contextlib.suppress(Exception):
+            _modbus_ns = __import__("protoskipper.builtin_drivers.modbus", fromlist=[""])
+
         local_ns: dict[str, object] = {
             "state": self._state,
             "manager": self._session_manager,
             "sessions": self._session_manager.active_workers,
+            "iec104": _iec104_ns,
+            "modbus": _modbus_ns,
         }
         console = code.InteractiveConsole(locals=local_ns)
 

@@ -1,0 +1,32 @@
+id: siemens_desigo
+display_name: "Siemens Desigo CC / PXC / RXC / Synco"
+vendor_id: 4
+quirks: []
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 20
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 130
+    name: "SIE-Logic-Function"
+    description: "Siemens Desigo logic function block object"
+  - type_id: 131
+    name: "SIE-Station-Object"
+    description: "Siemens station-level object"
+proprietary_properties:
+  - property_id: 3100
+    name: "SIE-Object-Class"
+    object_types: ["device"]
+    data_type: "unsigned"
+    description: "Siemens internal object class code"
+  - property_id: 3101
+    name: "SIE-Quality-Code"
+    object_types: ["analog-input", "analog-value", "binary-input"]
+    data_type: "unsigned"
+    description: "Siemens extended quality code property"
+notes: |
+  Siemens Desigo CC (formerly APOGEE) uses vendor_id 4.
+  PXC / PXG controllers are generally well-behaved BACnet devices.
+  Desigo CC supports segmentation and RPM without issues.
+  Synco 700 series uses slightly different proprietary extensions.
+  Siemens APOGEE BACnet uses vendor_id 4 same as Desigo.

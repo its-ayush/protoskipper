@@ -1,0 +1,29 @@
+id: schneider_ecostruxure
+display_name: "Schneider Electric EcoStruxure BMS / TAC Vista / MicroNet"
+vendor_id: 10
+quirks: []
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 16
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 145
+    name: "SE-Trend-Object"
+    description: "Schneider Electric extended trend object"
+proprietary_properties:
+  - property_id: 5201
+    name: "SE-Hardware-Version"
+    object_types: ["device"]
+    data_type: "characterstring"
+    description: "Schneider proprietary hardware version string"
+  - property_id: 5202
+    name: "SE-Loop-Output-Percent"
+    object_types: ["loop"]
+    data_type: "real"
+    description: "Schneider TAC loop output as percentage"
+notes: |
+  Schneider Electric EcoStruxure (formerly TAC Vista / Andover Continuum)
+  uses vendor_id 10.  MicroNet controllers use vendor_id 10 as well.
+  SmartX AS (Advanced Server) and SpaceLogic controllers are well-behaved.
+  Older TAC Vista devices may have limited RPM batch support.
+  EcoStruxure Building Operation (EBO) fully supports BACnet/IP and BACnet/SC.

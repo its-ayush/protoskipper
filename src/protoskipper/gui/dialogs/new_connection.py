@@ -100,7 +100,12 @@ class NewConnectionDialog(QDialog):
         self._unit_id_spin.setRange(1, 247)
         self._unit_id_spin.setValue(1)
         self._unit_id_spin.setAccessibleName(self.tr("Modbus unit ID (slave address 1\u2013247)"))
-
+        # Device ID spinbox reused for BACnet (0 = any device on that IP).
+        self._device_id_spin = QSpinBox(self)
+        self._device_id_spin.setRange(0, 4194302)
+        self._device_id_spin.setValue(0)
+        self._device_id_spin.setSpecialValueText(self.tr("0 (auto / broadcast)"))
+        self._device_id_spin.setAccessibleName(self.tr("BACnet Device Instance (0 = any)"))
         self._label_edit = QLineEdit(self)
         self._label_edit.setPlaceholderText(self.tr("Optional friendly name (e.g. 'Feeder-1 RTU')"))
         self._label_edit.setAccessibleName(self.tr("Session label (optional friendly name)"))
@@ -187,6 +192,10 @@ class NewConnectionDialog(QDialog):
         self._baud_row_label = QLabel(self.tr("Baud rate:"), self)
         form.addRow(self._baud_row_label, self._baud_combo)
 
+        # BACnet-specific Device ID row
+        self._device_id_row_label = QLabel(self.tr("Device ID:"), self)
+        form.addRow(self._device_id_row_label, self._device_id_spin)
+
         # Common rows
         self._unit_id_row_label = QLabel(self.tr("Unit ID:"), self)
         form.addRow(self._unit_id_row_label, self._unit_id_spin)
@@ -221,6 +230,7 @@ class NewConnectionDialog(QDialog):
         proto_id: str | None = self._protocol_combo.currentData()
         is_rtu = proto_id is not None and "rtu" in proto_id.lower()
         is_iec104 = proto_id is not None and proto_id.startswith("iec104")
+        is_bacnet = proto_id is not None and proto_id.startswith("bacnet")
 
         # TCP-specific widgets
         for w in (
@@ -240,14 +250,23 @@ class NewConnectionDialog(QDialog):
         ):
             w.setVisible(is_rtu)
 
+        # BACnet Device ID replaces Modbus/IEC104 Unit ID
+        self._device_id_row_label.setVisible(is_bacnet)
+        self._device_id_spin.setVisible(is_bacnet)
+        self._unit_id_row_label.setVisible(not is_bacnet)
+        self._unit_id_spin.setVisible(not is_bacnet)
+
         # Reskin the unit/CA spinbox per protocol.
-        if is_iec104:
+        if is_bacnet:
+            if self._tcp_port_spin.value() in (502, 2404):
+                self._tcp_port_spin.setValue(47808)
+        elif is_iec104:
             self._unit_id_row_label.setText(self.tr("Common address:"))
             self._unit_id_spin.setRange(1, 65535)
             self._unit_id_spin.setAccessibleName(
                 self.tr("IEC 60870-5-104 common address (1\u201365534)")
             )
-            if self._tcp_port_spin.value() == 502:
+            if self._tcp_port_spin.value() in (502, 47808):
                 self._tcp_port_spin.setValue(2404)
         else:
             self._unit_id_row_label.setText(self.tr("Unit ID:"))
@@ -257,7 +276,7 @@ class NewConnectionDialog(QDialog):
             self._unit_id_spin.setAccessibleName(
                 self.tr("Modbus unit ID (slave address 1\u2013247)")
             )
-            if not is_rtu and self._tcp_port_spin.value() == 2404:
+            if not is_rtu and self._tcp_port_spin.value() in (2404, 47808):
                 self._tcp_port_spin.setValue(502)
 
         # Pre-fill the serial port for RTU if none is selected yet.
@@ -382,26 +401,31 @@ class NewConnectionDialog(QDialog):
     def set_address(self, address: str) -> None:
         """Populate the transport fields by parsing an address string.
 
-        For TCP: ``host:port/unit=N`` → fills Host, Port, and Unit ID.
+        For TCP: ``host:port/unit=N``, ``host:port/ca=N``, or ``host:port/dev=N``
+        → fills Host, Port, and the relevant ID spinbox.
         For RTU: the raw address string is placed in the serial-port field.
         """
         import re
 
         proto_id: str | None = self._protocol_combo.currentData()
         is_rtu = proto_id is not None and "rtu" in proto_id.lower()
+        is_bacnet = proto_id is not None and proto_id.startswith("bacnet")
         address = address.strip()
         if is_rtu:
             self._serial_port_combo.setCurrentText(address)
         else:
             m = re.match(
-                r"^(?P<host>[^\s:/]+)(?::(?P<port>\d+))?(?:/(?:unit|ca)=(?P<unit>\d+))?$",
+                r"^(?:bacnet://)?(?P<host>[^\s:/]+)(?::(?P<port>\d+))?"
+                r"(?:/dev=(?P<dev>\d+))?(?:/(?:unit|ca)=(?P<unit>\d+))?$",
                 address,
             )
             if m:
                 self._host_edit.setText(m.group("host"))
                 if m.group("port"):
                     self._tcp_port_spin.setValue(int(m.group("port")))
-                if m.group("unit"):
+                if is_bacnet and m.group("dev"):
+                    self._device_id_spin.setValue(int(m.group("dev")))
+                elif not is_bacnet and m.group("unit"):
                     self._unit_id_spin.setValue(int(m.group("unit")))
             else:
                 self._host_edit.setText(address)
@@ -416,11 +440,19 @@ class NewConnectionDialog(QDialog):
         proto_id: str = self._protocol_combo.currentData()
         is_rtu = "rtu" in proto_id.lower()
         is_iec104 = proto_id.startswith("iec104")
+        is_bacnet = proto_id.startswith("bacnet")
         unit = self._unit_id_spin.value()
         if is_rtu:
             port = self._serial_port_combo.currentText().strip()
             baud = self._baud_combo.currentText()
             address = f"{port}@{baud},N,1/unit={unit}"
+        elif is_bacnet:
+            host = self._host_edit.text().strip()
+            tcp_port = self._tcp_port_spin.value()
+            dev_id = self._device_id_spin.value()
+            address = f"{host}:{tcp_port}"
+            if dev_id > 0:
+                address += f"/dev={dev_id}"
         else:
             host = self._host_edit.text().strip()
             tcp_port = self._tcp_port_spin.value()

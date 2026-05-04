@@ -1,0 +1,28 @@
+id: alc_webctrl
+display_name: "Automated Logic Corporation WebCTRL / LGR"
+vendor_id: 88
+quirks: []
+default_apdu_timeout_ms: 6000
+rpm_batch_size: 16
+cov_lifetime_s: 300
+segmentation_supported: true
+proprietary_object_types:
+  - type_id: 139
+    name: "ALC-Logic-Group"
+    description: "ALC WebCTRL logic group object"
+proprietary_properties:
+  - property_id: 7801
+    name: "ALC-Sensor-Type"
+    object_types: ["analog-input"]
+    data_type: "unsigned"
+    description: "ALC WebCTRL sensor type code"
+  - property_id: 7802
+    name: "ALC-Output-Mode"
+    object_types: ["analog-output", "binary-output"]
+    data_type: "enumerated"
+    description: "ALC WebCTRL output configuration mode"
+notes: |
+  Automated Logic Corporation (ALC, acquired by Carrier) uses vendor_id 88.
+  WebCTRL BAS with LGR (Local Gateway Routers) and BACnet Explorers.
+  ALC controllers are generally standards-compliant.
+  WebCTRL 7.0+ supports BACnet/IP and BACnet/SC.
