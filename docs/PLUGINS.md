@@ -205,6 +205,14 @@ class _MySession(DriverSession, Subscriber, Capturer):
 The GUI introspects these via `isinstance()` and enables corresponding UI
 affordances only for sessions that declare them.
 
+> **Note on GOOSE:** GOOSE publish/subscribe is a Layer 2 multicast service
+> and is not modelled as a per-session capability. Plugins that implement
+> IEC 61850 GOOSE should follow the pattern in
+> `plugins-builtin/protoskipper-iec61850/src/protoskipper_iec61850/goose/`:
+> a standalone `GooseSubscriberService` / `GoosePublisherService` pair with
+> Qt wrappers registered through the `protoskipper.gui_contributions`
+> entry-point group rather than through `DriverSession` mix-ins.
+
 ## Common mistakes
 
 * **Calling `commit_write` without consulting `SafetyContext`.** This will

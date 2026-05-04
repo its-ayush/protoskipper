@@ -21,6 +21,7 @@ separated layers:
 |  - Main window, dockable panels                              |
 |  - Confirmation dialogs, profile picker                      |
 |  - Packet view, watchlist, scripting REPL                    |
+|  - GOOSE subscriber / publisher panels                       |
 +--------------------------------------------------------------+
 |  CLI  (src/protoskipper/cli.py)                              |
 |  - Headless commands: list-protocols, scan, ...              |
@@ -32,7 +33,9 @@ separated layers:
 |  - Safety context, error hierarchy                           |
 +--------------------------------------------------------------+
 |  Drivers                                                     |
-|  - Built-in: builtin_drivers/{modbus,iec104,bacnet,iec61850} |
+|  - Built-in: builtin_drivers/modbus/ (TCP + RTU)            |
+|  - Built-in plugin: plugins-builtin/protoskipper-iec61850/  |
+|    (IEC 61850 MMS + GOOSE, installed via pip install -e)     |
 |  - Community: any pip-installable plugin registered through  |
 |    the `protoskipper.protocols` entry-point group            |
 +--------------------------------------------------------------+
@@ -58,9 +61,17 @@ support:
 
 | Protocol | Capability |
 | --- | --- |
-| `Subscriber` | Push-style updates (BACnet COV, IEC 61850 reports). |
+| `Subscriber` | Push-style updates (BACnet COV, IEC 61850 reports, BRCB/URCB). |
 | `Simulator` | Driver can act as the slave/server side. |
 | `Capturer` | Driver can stream raw frames to a `CaptureSink`. |
+
+GOOSE publish/subscribe lives *outside* the `DriverSession` contract
+because it is a Layer 2 multicast service, not a per-device connection.
+It is implemented as standalone services (`GooseSubscriberService` and
+`GoosePublisherService` in `protoskipper_iec61850.goose`) with thin Qt
+wrappers (`GooseSubscriberQt`, `GoosePublisherQt`) in
+`gui/services/goose_service.py`. The GUI panels for GOOSE operate
+independently of the session lifecycle.
 
 The GUI uses `isinstance(session, Subscriber)` etc. to decide which
 affordances to enable; a Modbus-only driver simply does not inherit from
@@ -178,24 +189,28 @@ the difference between "wasn't asked" and "was asked, declined".
 | How do plugins register? | `src/protoskipper/core/plugin_loader.py` |
 | What does the audit log record? | `src/protoskipper/core/audit.py` |
 | How is a session opened? | `src/protoskipper/core/session.py` |
-| What does a real driver look like? | `src/protoskipper/builtin_drivers/modbus/driver.py` |
+| What does a Modbus driver look like? | `src/protoskipper/builtin_drivers/modbus/driver.py` |
+| What does an IEC 61850 driver look like? | `plugins-builtin/protoskipper-iec61850/src/protoskipper_iec61850/driver.py` |
+| How does GOOSE pub/sub work? | `plugins-builtin/protoskipper-iec61850/src/protoskipper_iec61850/goose/` |
 | How is the GUI laid out? | `src/protoskipper/gui/main_window.py` |
 
 ## Where the architecture is going (roadmap)
 
-This document describes the Phase-1 scaffold. The intended evolution:
+This document describes the current state and intended evolution:
 
-* **Phase 1 (now)** — Modbus TCP end-to-end, safety profiles, audit log,
+* **Phase 1 (done)** — Modbus TCP end-to-end, safety profiles, audit log,
   GUI shell, plugin contract.
 * **Phase 2** — IEC 60870-5-104, capture/replay pipeline (pcapng with
   custom block types), packet-view rendering, watchlist live updates.
 * **Phase 3** — BACnet/IP discovery and object browsing, scripting REPL
   with full driver bindings, register-map import for Modbus.
-* **Phase 4** — IEC 61850 (MMS, GOOSE), SCD parsing, report blocks,
-  cross-protocol scripted test workflows.
+* **Phase 4 (done)** — IEC 61850 MMS (connect, browse, read/write,
+  reporting BRCB/URCB, logging, file services, setting-group services)
+  plus GOOSE subscriber and publisher with burst retransmission schedule
+  (IEC 61850-8-1) and GUI panels. SCL parser and diff engine.
 * **Phase 5+** — Community plugin ecosystem (DNP3, OPC UA, Profibus,
   vendor-specific stacks), simulation features, vendor-specific GUI
-  contributions.
+  contributions, cross-protocol scripted test workflows.
 
 The contract documented in `driver.py` is intended to be stable through
 all of these. Breaking changes to the ABC are major-version events and

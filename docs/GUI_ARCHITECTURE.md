@@ -65,6 +65,8 @@ What the GUI is **not** trying to be:
 |  |   - toolbar    |   |   - WriteConfirm   |   |   - ObjectBrowser|  |
 |  |   - dock layout|   |   - SafetyPrompt   |   |   - Watchlist    |  |
 |  |   - status bar |   |   - About          |   |   - PacketView   |  |
+|  |                |   |                    |   |   - GooseSub     |  |
+|  |                |   |                    |   |   - GoosePub     |  |
 |  +-------+--------+   +---------+----------+   +---------+--------+  |
 |          |                      |                        |           |
 |          +---------+------------+------------+-----------+           |
@@ -74,8 +76,8 @@ What the GUI is **not** trying to be:
 |             |  - QObject signals      |  - DeviceTree|               |
 |             |  - sessions[]           |  - Watchlist |               |
 |             |  - devices[]            |  - PacketLog |               |
-|             |  - watchlist items[]    +--------------+               |
-|             |  - active_profile       |                              |
+|             |  - watchlist items[]    |  - GooseFrame|               |
+|             |  - active_profile       +--------------+               |
 |             +----------+--------------+                              |
 |                        | (signals: device_added, session_opened,     |
 |                        |  read_completed, packet_received, ...)      |
@@ -230,10 +232,27 @@ worker.commit_write(intent)
 It is the only place we use it; everywhere else, queued connections
 are non-blocking.
 
-### 3.5 Threads we do NOT spawn
+### 3.5 GOOSE service threads
+
+`GooseSubscriberService` and `GoosePublisherService` in
+`protoskipper_iec61850.goose` manage their own C-level threads via
+`pyiec61850`'s `GooseReceiver` and `GoosePublisher`. The Qt wrappers
+`GooseSubscriberQt` / `GoosePublisherQt` (in
+`gui/services/goose_service.py`) receive callbacks on those C threads and
+re-emit them as Qt signals so all UI updates land on the main thread.
+GOOSE panels therefore do not need a `QThread`; they are lightweight
+`QWidget` instances that own a `GooseSubscriberQt` or `GoosePublisherQt`.
+
+The publisher retransmission burst schedule follows IEC 61850-8-1:
+an immediate send followed by additional sends after T0, T0, 2×T0,
+4×T0, and then at `max_retransmit_interval_ms` until the next state
+change. This is handled with `threading.Timer` inside the service; the
+Qt wrapper is not involved.
+
+### 3.6 Threads we do NOT spawn
 
 * **One thread per device on a multi-drop bus.** Modbus RTU and IEC 61850
-  GOOSE share a transport; the worker for that transport multiplexes
+  MMS share a transport; the worker for that transport multiplexes
   internally. The threading model is one worker per *session*, not per
   *device*.
 * **A thread for the audit log.** Audit writes are SQLite calls; they
@@ -318,6 +337,7 @@ We use Qt's Model-View architecture for every list and tree:
 | Watchlist | `WatchlistModel(QAbstractTableModel)` | Tag, Value, Quality, Updated |
 | Packet log | `PacketLogModel(QAbstractTableModel)` | Time, Direction, Protocol, Length, Decoded |
 | Object browser | `ObjectBrowserModel(QAbstractTableModel)` | ID, Type, Access, Unit, Label |
+| GOOSE subscriber | `GooseFrameModel(QAbstractTableModel)` | Time ms, GoCB Ref, stNum, sqNum, confRev, Sim, Data |
 
 Models subscribe to `ApplicationState` signals and emit
 `dataChanged` / `rowsInserted` / `rowsRemoved` accordingly. Views are
@@ -458,6 +478,69 @@ In `PRODUCTION` profile the same dialog has an additional input:
 
 with the Confirm button disabled until the typed text matches.
 
+### 6.5 GOOSE subscriber panel
+
+Reachable from **Tools > GOOSE Subscriber** (or as a dockable panel).
+The panel owns a `GooseSubscriberQt` service and presents:
+
+```
++ GOOSE Subscriber -------------------------------------------------+
+| Interface: [ eth0                    ]  [Start] [Stop] [Clear]    |
+| GoCB refs (one per line):                                         |
+| [ CTRL1/LLN0$GO$gcbAnalogValues                                   |
+|   PROT1/LLN0$GO$gcbStatus                               ]         |
+|                                                                   |
+|  Time (ms)       GoCB Ref               stNum  sqNum  Sim  Data  |
+|  1714723200.012  CTRL1/LLN0$GO$gcb...   1      0      No   [...]  |
+|  1714723201.145  PROT1/LLN0$GO$gcb...   1      1      Yes  [...]  |
++-------------------------------------------------------------------+
+```
+
+Simulation frames (IEC 61850-8-1 Simulation bit set) are highlighted in
+amber. The table is capped at 500 rows (oldest rows dropped first).
+`GooseFrame` objects received from the C callback thread are passed
+through `GooseSubscriberQt.frame_received` (a `Signal(object)`) to the
+main thread before being appended to `GooseFrameModel`.
+
+### 6.6 GOOSE publisher panel
+
+Reachable from **Tools > GOOSE Publisher**. Intended for commissioning
+labs; write paths are **disabled when `is_production=True`** is passed
+at construction (the `GoosePublisherPanel` constructor parameter lets
+integrators lock out publishing in production deployments).
+
+```
++ GOOSE Publisher -------------------------------------------------+
+| Interface: [ eth0              ]  GoCB Ref: [ CTRL1/LLN0$GO$gcb ]|
+| DataSet:   [ CTRL1/LLN0$DS1   ]  AppID: [ 0x0001 ]  ConfRev: [1]|
+| T0 (ms):   [ 4                ]  Max retransmit (ms): [ 5000    ]|
+| [x] Simulation                                                    |
+|                                                                   |
+| Dataset values (one per line, Python literal):                    |
+| [ True                                                            |
+|   42                                                              |
+|   3.14                                                            |
+|   b'\xde\xad'                                    ]               |
+|                                                                   |
+| Error injection:                                                  |
+|   [ ] Duplicate sqNum                                             |
+|   [ ] Wrong confRev: [ 0    ]                                     |
+|   [ ] Wrong stNum:   [ 0    ]                                     |
+|   [ ] Wrong AppID:   [ 0x0000 ]                                   |
+|                                                                   |
+|              [Start] [Stop]                      [Publish]        |
+| Status: Published ✓                                               |
++-------------------------------------------------------------------+
+```
+
+Dataset values are entered as Python literals (`bool`, `int`, `float`,
+`bytes`). Parsing is done by `parse_dataset_literal` (in
+`protoskipper_iec61850.goose.publisher`) — a restricted wrapper around
+`ast.literal_eval` that rejects everything outside those four types.
+
+Error injection controls are provided for negative-testing scenarios
+(verifying IED responses to malformed GOOSE frames).
+
 ### 6.4 Capture/replay
 
 ```
@@ -549,7 +632,51 @@ Live polling (configurable interval) is a follow-up; v1 ships manual
 refresh only, by design — operators should explicitly trigger reads on
 production substations.
 
-### 7.5 Cancel and disconnect
+### 7.5 GOOSE subscribe
+
+```
+User opens GOOSE Subscriber panel (Tools > GOOSE Subscriber)
+  → GooseSubscriberPanel is created (or shown)
+  → User enters interface name and one or more GoCB references
+  → User clicks [Start]
+    → Panel creates a fresh GooseSubscriberQt
+    → Calls GooseSubscriberService.add_subscriber(go_cb_ref) for each ref
+    → Calls GooseSubscriberService.start(iface)
+      → pyiec61850 GooseReceiver starts on its own thread
+      → C callback fires for each matching multicast frame
+      → Callback decodes MmsValues → GooseFrame dataclass
+      → GooseSubscriberQt.frame_received signal emitted (thread-safe)
+    → GooseSubscriberPanel._on_frame() appends GooseFrame to GooseFrameModel
+    → Table view scrolls to bottom; simulation rows amber-highlighted
+  → User clicks [Stop]
+    → GooseSubscriberService.stop() stops receiver and destroys C objects
+    → Status label updated
+```
+
+### 7.6 GOOSE publish (commissioning mode)
+
+```
+User opens GOOSE Publisher panel (Tools > GOOSE Publisher)
+  → GoosePublisherPanel is created with is_production=False
+  → User fills interface, GoCB ref, DataSet ref, AppID, ConfRev, T0
+  → User enters dataset values as Python literals (one per line)
+  → User clicks [Start]
+    → Panel creates GoosePublisherQt
+    → Calls GoosePublisherQt.configure(...)
+      → GoosePublisherService.open() creates CommParameters struct,
+        GoosePublisher C object, sets GoCbRef/DataSetRef/ConfRev/GoID
+  → User clicks [Publish]
+    → Panel calls _parse_values() → parse_dataset_literal per line
+    → Panel calls GoosePublisherQt.publish(values)
+      → GoosePublisherService.publish() builds LinkedList of MmsValues,
+        increments stNum, transmits immediately
+      → Burst retransmission timer fires: T0, T0, 2×T0, 4×T0, maxTime, ...
+    → Status label shows "Published ✓"
+  → User clicks [Stop]
+    → GoosePublisherService.close() cancels timer, destroys C publisher
+```
+
+### 7.7 Cancel and disconnect
 
 ```
 User clicks the cancel button on a long discovery
