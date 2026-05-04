@@ -6,9 +6,10 @@ are persisted in QSettings under the "DataSailors"/"ProtoSkipper" org/app
 keys. Static helpers expose individual values so other modules (MainWindow,
 NewConnectionDialog) can read them without constructing the dialog.
 
-The dialog uses two tabs:
-  • General — operator, audit dir, session profile, theme, density
-  • BACnet  — per-protocol defaults (UDP port, APDU timeouts, COV lifetime …)
+The dialog uses three tabs:
+  • General   — operator, audit dir, session profile, theme, density
+  • BACnet    — per-protocol defaults (UDP port, APDU timeouts, COV lifetime …)
+  • IEC 61850 — per-protocol defaults (network interface, AP-Title, SCL paths)
 """
 
 from __future__ import annotations
@@ -45,6 +46,10 @@ _BACNET_DEFAULT_APDU_RETRIES = 3
 _BACNET_DEFAULT_COV_LIFETIME_S = 300
 _BACNET_DEFAULT_RPM_BATCH_SIZE = 16
 _BACNET_DEFAULT_VENDOR_ID = 0
+
+# IEC 61850 defaults
+_IEC61850_DEFAULT_IFACE = ""
+_IEC61850_DEFAULT_AP_TITLE = "1,3,9999,33"
 
 
 class PreferencesDialog(QDialog):
@@ -229,6 +234,7 @@ class PreferencesDialog(QDialog):
         self._tabs = QTabWidget(self)
         self._tabs.addTab(general_tab, self.tr("General"))
         self._tabs.addTab(bacnet_tab, self.tr("BACnet"))
+        self._tabs.addTab(self._build_iec61850_tab(s), self.tr("IEC 61850"))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
@@ -251,6 +257,94 @@ class PreferencesDialog(QDialog):
         if chosen:
             self._audit_dir_edit.setText(chosen)
 
+    def _browse_dir(self, line_edit: QLineEdit, title: str) -> None:
+        """Generic directory-picker helper shared between IEC 61850 path fields."""
+        chosen = QFileDialog.getExistingDirectory(self, self.tr(title), line_edit.text())
+        if chosen:
+            line_edit.setText(chosen)
+
+    def _build_iec61850_tab(self, s: QSettings) -> QWidget:
+        """Construct and return the IEC 61850 preferences tab."""
+        # ---- default network interface ----------------------------------
+        self._iec61850_iface_edit = QLineEdit(self)
+        self._iec61850_iface_edit.setText(
+            s.value("iec61850/default_iface", _IEC61850_DEFAULT_IFACE, str)
+        )
+        self._iec61850_iface_edit.setPlaceholderText(self.tr("e.g. eth0  (empty = auto)"))
+        self._iec61850_iface_edit.setAccessibleName(
+            self.tr("Default network interface for GOOSE/SV")
+        )
+
+        # ---- default AP-Title -------------------------------------------
+        self._iec61850_ap_title_edit = QLineEdit(self)
+        self._iec61850_ap_title_edit.setText(
+            s.value("iec61850/ap_title", _IEC61850_DEFAULT_AP_TITLE, str)
+        )
+        self._iec61850_ap_title_edit.setPlaceholderText(self.tr("e.g. 1,3,9999,33"))
+        self._iec61850_ap_title_edit.setAccessibleName(self.tr("Local AP-Title OID"))
+
+        # ---- SCL search path --------------------------------------------
+        self._iec61850_scl_path_edit = QLineEdit(self)
+        self._iec61850_scl_path_edit.setText(s.value("iec61850/scl_search_path", "", str))
+        self._iec61850_scl_path_edit.setPlaceholderText(
+            self.tr("Directory to search for .icd/.cid/.scd files")
+        )
+        self._iec61850_scl_path_edit.setAccessibleName(self.tr("SCL file search path"))
+
+        scl_browse = QPushButton(self.tr("Browse…"), self)
+        scl_browse.setAccessibleName(self.tr("Browse for SCL search directory"))
+        scl_browse.clicked.connect(
+            lambda: self._browse_dir(self._iec61850_scl_path_edit, "Choose SCL search directory")
+        )
+
+        scl_widget = QWidget(self)
+        scl_row = QHBoxLayout(scl_widget)
+        scl_row.setContentsMargins(0, 0, 0, 0)
+        scl_row.addWidget(self._iec61850_scl_path_edit)
+        scl_row.addWidget(scl_browse)
+
+        # ---- vendor profile library path --------------------------------
+        self._iec61850_vendor_path_edit = QLineEdit(self)
+        self._iec61850_vendor_path_edit.setText(s.value("iec61850/vendor_profile_path", "", str))
+        self._iec61850_vendor_path_edit.setPlaceholderText(
+            self.tr("Directory containing vendor .json profile files")
+        )
+        self._iec61850_vendor_path_edit.setAccessibleName(self.tr("Vendor profile library path"))
+
+        vendor_browse = QPushButton(self.tr("Browse…"), self)
+        vendor_browse.setAccessibleName(self.tr("Browse for vendor profile library directory"))
+        vendor_browse.clicked.connect(
+            lambda: self._browse_dir(
+                self._iec61850_vendor_path_edit, "Choose vendor profile directory"
+            )
+        )
+
+        vendor_widget = QWidget(self)
+        vendor_row = QHBoxLayout(vendor_widget)
+        vendor_row.setContentsMargins(0, 0, 0, 0)
+        vendor_row.addWidget(self._iec61850_vendor_path_edit)
+        vendor_row.addWidget(vendor_browse)
+
+        # ---- form -------------------------------------------------------
+        iec_form = QFormLayout()
+        iec_form.addRow(self.tr("Default network interface:"), self._iec61850_iface_edit)
+        iec_form.addRow(self.tr("Local AP-Title:"), self._iec61850_ap_title_edit)
+        iec_form.addRow(self.tr("SCL search path:"), scl_widget)
+        iec_form.addRow(self.tr("Vendor profile path:"), vendor_widget)
+
+        tab = QWidget(self)
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.addWidget(
+            QLabel(
+                self.tr("These values are used as defaults when opening new IEC 61850 sessions."),
+                self,
+            )
+        )
+        tab_layout.addSpacing(8)
+        tab_layout.addLayout(iec_form)
+        tab_layout.addStretch()
+        return tab
+
     def _save_and_accept(self) -> None:
         s = QSettings(_ORG, _APP)
 
@@ -271,6 +365,12 @@ class PreferencesDialog(QDialog):
         s.setValue("bacnet/rpm_batch_size", self._bacnet_rpm_batch_spin.value())
         s.setValue("bacnet/vendor_id", self._bacnet_vendor_id_spin.value())
         s.setValue("bacnet/who_is_range", self._bacnet_who_is_range_edit.text().strip())
+
+        # IEC 61850
+        s.setValue("iec61850/default_iface", self._iec61850_iface_edit.text().strip())
+        s.setValue("iec61850/ap_title", self._iec61850_ap_title_edit.text().strip())
+        s.setValue("iec61850/scl_search_path", self._iec61850_scl_path_edit.text().strip())
+        s.setValue("iec61850/vendor_profile_path", self._iec61850_vendor_path_edit.text().strip())
 
         self.accept()
 
@@ -355,3 +455,25 @@ class PreferencesDialog(QDialog):
     def bacnet_who_is_range() -> str:
         """Return the saved Who-Is range string (empty = all devices)."""
         return QSettings(_ORG, _APP).value("bacnet/who_is_range", "", str)
+
+    # ---- static helpers (IEC 61850) -------------------------------------
+
+    @staticmethod
+    def iec61850_default_iface() -> str:
+        """Return the saved default network interface (empty = auto-select)."""
+        return QSettings(_ORG, _APP).value("iec61850/default_iface", _IEC61850_DEFAULT_IFACE, str)
+
+    @staticmethod
+    def iec61850_ap_title() -> str:
+        """Return the saved local AP-Title OID string (default '1,3,9999,33')."""
+        return QSettings(_ORG, _APP).value("iec61850/ap_title", _IEC61850_DEFAULT_AP_TITLE, str)
+
+    @staticmethod
+    def iec61850_scl_search_path() -> str:
+        """Return the saved SCL file search path (empty = not configured)."""
+        return QSettings(_ORG, _APP).value("iec61850/scl_search_path", "", str)
+
+    @staticmethod
+    def iec61850_vendor_profile_path() -> str:
+        """Return the saved vendor profile library path (empty = not configured)."""
+        return QSettings(_ORG, _APP).value("iec61850/vendor_profile_path", "", str)
