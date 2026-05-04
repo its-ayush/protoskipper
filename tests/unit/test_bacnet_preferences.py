@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import pytest
 
+# Skip entire module gracefully on environments without PySide6 (e.g. headless CI).
+pytest.importorskip("PySide6")
+
 # QSettings requires an application to exist for some backends.
 # Use conftest's QApplication fixture (or create a minimal one here).
 from PySide6.QtCore import QCoreApplication, QSettings
