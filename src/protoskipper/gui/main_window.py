@@ -339,6 +339,16 @@ class MainWindow(QMainWindow):
         self._action_iec104_load_setup.triggered.connect(self._load_iec104_setup)
         iec104_menu.addAction(self._action_iec104_load_setup)
 
+        # IEC 61850 submenu (P8.G.2 — simulator wizard)
+        iec61850_menu = tools_menu.addMenu(self.tr("IEC\u00a061850"))
+
+        self._action_iec61850_simulator = QAction(self.tr("IED Simulator\u2026"), self)
+        self._action_iec61850_simulator.setToolTip(
+            "Launch the IED simulator — serve an MMS data model from an SCL file"
+        )
+        self._action_iec61850_simulator.triggered.connect(self._open_ied_simulator_dialog)
+        iec61850_menu.addAction(self._action_iec61850_simulator)
+
         # P3.D View menu — Theme + Density
         self._action_theme_light = QAction(self.tr("&Light"), self)
         self._action_theme_light.setCheckable(True)
@@ -1041,6 +1051,19 @@ class MainWindow(QMainWindow):
             if info is not None:
                 profile = info.profile
         dlg = Iec104FuzzerDialog(profile=profile, parent=self)
+        dlg.exec()
+
+    def _open_ied_simulator_dialog(self) -> None:
+        """Tools → IEC 61850 → IED Simulator…"""
+        from protoskipper.gui.dialogs.ied_simulator import IedSimulatorDialog
+
+        profile = None
+        sid = self._active_session_id()
+        if sid is not None:
+            info = self._state.session(sid)
+            if info is not None:
+                profile = info.profile
+        dlg = IedSimulatorDialog(profile=profile, parent=self)
         dlg.exec()
 
     def _save_iec104_setup(self) -> None:
