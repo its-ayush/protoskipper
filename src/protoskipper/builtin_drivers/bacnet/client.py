@@ -42,7 +42,7 @@ import struct
 import threading
 from collections.abc import Iterator
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from protoskipper.core.driver import (
     Access,
@@ -351,6 +351,271 @@ class BacnetIpSession(DriverSession):
             _logger.debug("COV cancel pid=%d: %s", process_id, exc)
 
     # ------------------------------------------------------------------
+    # P7.B.9 — Alarms & events (async helpers)
+    # ------------------------------------------------------------------
+
+    async def _async_get_event_information(self) -> list[dict[str, Any]]:
+        """GetEventInformation confirmed request - enumerate active/unacked alarms."""
+        from bacpypes3.apdu import GetEventInformationRequest
+        from bacpypes3.pdu import Address
+
+        all_events: list[dict[str, Any]] = []
+        last_obj_id: Any = None
+
+        while True:
+            request = GetEventInformationRequest()
+            if last_obj_id is not None:
+                request.lastReceivedObjectIdentifier = last_obj_id
+            request.pduDestination = Address(self._remote_addr)
+            try:
+                response = await self._app.request(request)
+            except Exception as exc:
+                _logger.debug("GetEventInformation failed: %s", exc)
+                break
+
+            if response is None:
+                break
+
+            for ei in getattr(response, "listOfEventSummaries", None) or []:
+                try:
+                    obj_type, inst = ei.objectIdentifier
+                    oid_str = object_id_str(str(obj_type), int(inst))
+                    acked = getattr(ei, "acknowledgedTransitions", None)
+                    all_events.append(
+                        {
+                            "object_id": oid_str,
+                            "event_state": str(getattr(ei, "eventState", "normal")),
+                            "acknowledged_transitions": {
+                                "to_offnormal": bool(getattr(acked, "toOffnormal", False)),
+                                "to_fault": bool(getattr(acked, "toFault", False)),
+                                "to_normal": bool(getattr(acked, "toNormal", False)),
+                            },
+                            "notify_type": str(getattr(ei, "notifyType", "alarm")),
+                            "event_priorities": list(getattr(ei, "eventPriorities", []) or []),
+                        }
+                    )
+                except Exception as exc:
+                    _logger.debug("Malformed EventSummary: %s", exc)
+
+            if not getattr(response, "moreEvents", False):
+                break
+            if all_events:
+                last_raw = all_events[-1]["object_id"].split(":")
+                last_obj_id = (last_raw[0], int(last_raw[1]))
+            else:
+                break
+
+        return all_events
+
+    async def _async_acknowledge_alarm(
+        self,
+        object_id: str,
+        event_state: str,
+        process_id: int,
+        source: str,
+    ) -> None:
+        """Send AcknowledgeAlarm confirmed request."""
+        from bacpypes3.apdu import AcknowledgeAlarmRequest, TimeStamp
+        from bacpypes3.basetypes import EventState
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import Time
+
+        obj_type, instance = parse_object_id(object_id)
+        now_time = datetime.now(tz=timezone.utc)
+        ts = TimeStamp(time=Time(now_time.strftime("%H:%M:%S")))
+        request = AcknowledgeAlarmRequest(
+            acknowledgingProcessIdentifier=process_id,
+            eventObjectIdentifier=(obj_type, instance),
+            eventStateAcknowledged=EventState(event_state),
+            timeStamp=ts,
+            acknowledgmentSource=source,
+            timeOfAcknowledgment=ts,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.B.10 — TrendLog / ReadRange (async helper)
+    # ------------------------------------------------------------------
+
+    async def _async_read_trend_log(
+        self,
+        object_id: str,
+        range_type: str,
+        first: int,
+        count: int,
+        date_str: str,
+        time_str: str,
+    ) -> list[Any]:
+        """ReadRange logBuffer from a TrendLog or TrendLogMultiple object."""
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import ObjectIdentifier, PropertyIdentifier
+
+        obj_type, instance = parse_object_id(object_id)
+        oid = ObjectIdentifier((obj_type, instance))
+        prop = PropertyIdentifier("logBuffer")
+        address = Address(self._remote_addr)
+        range_params = (range_type, first, date_str, time_str, count)
+
+        result = await self._app.read_range(address, oid, prop, range_params=range_params)
+        if result is None or hasattr(result, "errorClass"):
+            return []
+
+        records: list[Any] = []
+        for item in result if hasattr(result, "__iter__") else []:
+            try:
+                records.append(_log_record_to_dict(item))
+            except Exception as exc:
+                _logger.debug("Malformed log record: %s", exc)
+        return records
+
+    # ------------------------------------------------------------------
+    # P7.B.12 — File services (async helpers)
+    # ------------------------------------------------------------------
+
+    async def _async_read_file(
+        self,
+        file_object_id: str,
+        start_position: int,
+        chunk_size: int,
+    ) -> bytes:
+        """AtomicReadFile (stream access) — read the entire file in chunks."""
+        from bacpypes3.apdu import AtomicReadFileRequest
+        from bacpypes3.basetypes import (
+            AtomicReadFileRequestAccessMethodChoice,
+            AtomicReadFileRequestAccessMethodChoiceStreamAccess,
+        )
+        from bacpypes3.pdu import Address
+
+        obj_type, instance = parse_object_id(file_object_id)
+        pos = start_position
+        data = bytearray()
+
+        while True:
+            stream_access = AtomicReadFileRequestAccessMethodChoiceStreamAccess(
+                fileStartPosition=pos,
+                requestedOctetCount=chunk_size,
+            )
+            access = AtomicReadFileRequestAccessMethodChoice(streamAccess=stream_access)
+            request = AtomicReadFileRequest(
+                fileIdentifier=(obj_type, instance),
+                accessMethod=access,
+            )
+            request.pduDestination = Address(self._remote_addr)
+            response = await self._app.request(request)
+
+            if response is None or not hasattr(response, "accessMethod"):
+                break
+
+            chunk = bytes(getattr(response.accessMethod.streamAccess, "fileData", b"") or b"")
+            if chunk:
+                data.extend(chunk)
+                pos += len(chunk)
+
+            if getattr(response, "endOfFile", True):
+                break
+
+        return bytes(data)
+
+    async def _async_write_file(
+        self,
+        file_object_id: str,
+        file_data: bytes,
+        start_position: int,
+    ) -> int:
+        """AtomicWriteFile (stream access) — returns actual fileStartPosition."""
+        from bacpypes3.apdu import AtomicWriteFileRequest
+        from bacpypes3.basetypes import (
+            AtomicWriteFileRequestAccessMethodChoice,
+            AtomicWriteFileRequestAccessMethodChoiceStreamAccess,
+        )
+        from bacpypes3.pdu import Address
+
+        obj_type, instance = parse_object_id(file_object_id)
+        stream_access = AtomicWriteFileRequestAccessMethodChoiceStreamAccess(
+            fileStartPosition=start_position,
+            fileData=file_data,
+        )
+        access = AtomicWriteFileRequestAccessMethodChoice(streamAccess=stream_access)
+        request = AtomicWriteFileRequest(
+            fileIdentifier=(obj_type, instance),
+            accessMethod=access,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        response = await self._app.request(request)
+        if response is not None and hasattr(response, "fileStartPosition"):
+            return int(response.fileStartPosition)
+        return start_position
+
+    # ------------------------------------------------------------------
+    # P7.B.13 — Device management (async helpers)
+    # ------------------------------------------------------------------
+
+    async def _async_time_sync(self, dt: datetime, *, utc: bool) -> None:
+        """Send TimeSynchronization or UTCTimeSynchronization (unconfirmed)."""
+        from bacpypes3.apdu import (
+            DateTime,
+            TimeSynchronizationRequest,
+            UTCTimeSynchronizationRequest,
+        )
+        from bacpypes3.pdu import Address
+
+        bac_dt = DateTime.fromisoformat(dt.replace(tzinfo=None).isoformat())
+        if utc:
+            request: Any = UTCTimeSynchronizationRequest(time=bac_dt)
+        else:
+            request = TimeSynchronizationRequest(time=bac_dt)
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    async def _async_reinitialize_device(
+        self,
+        state: str,
+        password: str | None,
+    ) -> None:
+        """Send ReinitializeDevice confirmed request."""
+        from bacpypes3.apdu import (
+            ReinitializeDeviceRequest,
+            ReinitializeDeviceRequestReinitializedStateOfDevice,
+        )
+        from bacpypes3.pdu import Address
+
+        kwargs: dict[str, Any] = {
+            "reinitializedStateOfDevice": ReinitializeDeviceRequestReinitializedStateOfDevice(
+                state
+            ),
+        }
+        if password:
+            kwargs["password"] = password
+        request = ReinitializeDeviceRequest(**kwargs)
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    async def _async_device_communication_control(
+        self,
+        enable_disable: str,
+        time_duration: int | None,
+        password: str | None,
+    ) -> None:
+        """Send DeviceCommunicationControl confirmed request."""
+        from bacpypes3.apdu import (
+            DeviceCommunicationControlRequest,
+            DeviceCommunicationControlRequestEnableDisable,
+        )
+        from bacpypes3.pdu import Address
+
+        kwargs: dict[str, Any] = {
+            "enableDisable": DeviceCommunicationControlRequestEnableDisable(enable_disable),
+        }
+        if time_duration is not None:
+            kwargs["timeDuration"] = time_duration
+        if password:
+            kwargs["password"] = password
+        request = DeviceCommunicationControlRequest(**kwargs)
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    # ------------------------------------------------------------------
     # DriverSession ABC
     # ------------------------------------------------------------------
 
@@ -582,6 +847,297 @@ class BacnetIpSession(DriverSession):
                 _logger.debug("COV unsubscribe pid=%d: %s", pid, exc)
 
     # ------------------------------------------------------------------
+    # P7.B.9 — Alarms & events (public API)
+    # ------------------------------------------------------------------
+
+    def get_event_information(self) -> list[dict[str, Any]]:
+        """Poll GetEventInformation and return a list of active/unacked alarms.
+
+        Each entry is a dict with keys: ``object_id``, ``event_state``,
+        ``acknowledged_transitions``, ``notify_type``, ``event_priorities``.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_get_event_information(),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"GetEventInformation failed: {exc}") from exc
+
+    def acknowledge_alarm(
+        self,
+        object_id: str,
+        event_state: str,
+        *,
+        process_id: int = 1,
+        source: str = "ProtoSkipper",
+    ) -> None:
+        """Acknowledge an active alarm on *object_id*.
+
+        *event_state* must match the current event state: ``"normal"``,
+        ``"fault"``, ``"offnormal"``, ``"highLimit"``, ``"lowLimit"``, or
+        ``"lifeSafetyAlarm"``.  Safety-gated.
+        """
+        ref = ObjectRef(device=self.device, object_id=object_id, data_type="any")
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=event_state,
+            encoded_bytes=b"",
+            description=f"AcknowledgeAlarm {object_id} state={event_state}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("AcknowledgeAlarm denied by safety context")
+        try:
+            self._loop_thread.submit(
+                self._async_acknowledge_alarm(object_id, event_state, process_id, source),
+                timeout=self._apdu_timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"AcknowledgeAlarm failed for {object_id}: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # P7.B.10 — TrendLog retrieval (public API)
+    # ------------------------------------------------------------------
+
+    def read_trend_log(
+        self,
+        ref: ObjectRef,
+        *,
+        range_type: str = "p",
+        first: int = 1,
+        count: int = 100,
+        date_str: str = "2000-01-01",
+        time_str: str = "00:00:00",
+    ) -> list[Any]:
+        """Return log records from a TrendLog or TrendLogMultiple object.
+
+        *range_type* is ``'p'`` (by position), ``'s'`` (by sequence number),
+        or ``'t'`` (by time).  *first*/*count* used for ``'p'``/``'s'``;
+        *date_str* + *time_str* + *count* for ``'t'``.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_trend_log(
+                    ref.object_id,
+                    range_type=range_type,
+                    first=first,
+                    count=count,
+                    date_str=date_str,
+                    time_str=time_str,
+                ),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"ReadRange (TrendLog) failed for {ref.object_id}: {exc}") from exc
+
+    # ------------------------------------------------------------------
+    # P7.B.11 — Schedule & Calendar (public API)
+    # ------------------------------------------------------------------
+
+    _SCHEDULE_READ_PROPS: ClassVar[list[str]] = [
+        "objectName",
+        "description",
+        "presentValue",
+        "statusFlags",
+        "reliability",
+        "weeklySchedule",
+        "exceptionSchedule",
+        "scheduleDefault",
+        "effectivePeriod",
+        "priorityForWriting",
+    ]
+
+    def read_schedule(self, ref: ObjectRef) -> dict[str, Any]:
+        """Read all schedule-related properties of a Schedule object.
+
+        Returns a dict mapping property name to decoded value.
+        """
+        try:
+            rpm_result = self._loop_thread.submit(
+                self._async_rpm([(ref.object_id, self._SCHEDULE_READ_PROPS)]),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"read_schedule failed for {ref.object_id}: {exc}") from exc
+        return rpm_result.get(ref.object_id, {})
+
+    def write_schedule_default(
+        self,
+        ref: ObjectRef,
+        value: Any,
+        *,
+        data_type: str = "real",
+    ) -> WriteResult:
+        """Write the ``scheduleDefault`` property of a Schedule object.
+
+        For ``weeklySchedule`` and ``exceptionSchedule`` (complex sequences)
+        use ``prepare_write`` / ``commit_write`` directly with ``prop`` set
+        in the intent metadata.
+        """
+        intent = self.prepare_write(ref, value, data_type=data_type)
+        intent.metadata["prop"] = "scheduleDefault"
+        return self.commit_write(intent)
+
+    # ------------------------------------------------------------------
+    # P7.B.12 — File services (public API)
+    # ------------------------------------------------------------------
+
+    def read_file(
+        self,
+        ref: ObjectRef,
+        *,
+        start_position: int = 0,
+        chunk_size: int = 1400,
+    ) -> bytes:
+        """Read the entire content of a BACnet File object via AtomicReadFile.
+
+        *chunk_size* controls ``requestedOctetCount`` per APDU (the device's
+        Max-APDU-Length is the real upper bound in practice).
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_file(ref.object_id, start_position, chunk_size),
+                timeout=120,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"AtomicReadFile failed for {ref.object_id}: {exc}") from exc
+
+    def write_file(
+        self,
+        ref: ObjectRef,
+        data: bytes,
+        *,
+        start_position: int = 0,
+    ) -> WriteResult:
+        """Write *data* to a BACnet File object via AtomicWriteFile (stream mode).
+
+        Safety-gated.  Returns a :class:`WriteResult` recording the outcome.
+        """
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=data,
+            encoded_bytes=data,
+            description=(f"AtomicWriteFile {ref.object_id} pos={start_position} len={len(data)}"),
+            metadata={"start_position": start_position},
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("AtomicWriteFile denied by safety context")
+        ts = datetime.now(tz=timezone.utc)
+        try:
+            self._loop_thread.submit(
+                self._async_write_file(ref.object_id, data, start_position),
+                timeout=120,
+            )
+        except CommError:
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error="APDU timeout")
+            self.safety.record_write_outcome(result)
+            raise
+        except Exception as exc:
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error=str(exc))
+            self.safety.record_write_outcome(result)
+            raise ProtocolError(f"AtomicWriteFile failed for {ref.object_id}: {exc}") from exc
+        result = WriteResult(intent=intent, success=True, timestamp=ts)
+        self.safety.record_write_outcome(result)
+        return result
+
+    # ------------------------------------------------------------------
+    # P7.B.13 — Device management (public API)
+    # ------------------------------------------------------------------
+
+    def time_sync(self, dt: datetime | None = None, *, utc: bool = False) -> None:
+        """Broadcast TimeSynchronization (or UTCTimeSynchronization) to the device.
+
+        Passes *dt* (or ``datetime.now(utc)`` when *None*) as the reference
+        time.  This is an unconfirmed service — no acknowledgment is expected.
+        """
+        if dt is None:
+            dt = datetime.now(tz=timezone.utc)
+        try:
+            self._loop_thread.submit(
+                self._async_time_sync(dt, utc=utc),
+                timeout=self._apdu_timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"TimeSynchronization failed: {exc}") from exc
+
+    def reinitialize_device(
+        self,
+        state: str = "warmstart",
+        *,
+        password: str | None = None,
+    ) -> None:
+        """Send ReinitializeDevice to the remote device.
+
+        *state* is one of the ASHRAE 135 ``reinitializedStateOfDevice`` values
+        (``"coldstart"``, ``"warmstart"``, ``"activateChanges"``, …).
+        Safety-gated: denied in PRODUCTION unless the safety context allows.
+        """
+        ref = ObjectRef(device=self.device, object_id="device:any", data_type="any")
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=state,
+            encoded_bytes=b"",
+            description=f"ReinitializeDevice state={state}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("ReinitializeDevice denied by safety context")
+        try:
+            self._loop_thread.submit(
+                self._async_reinitialize_device(state, password),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"ReinitializeDevice failed (state={state}): {exc}") from exc
+
+    def device_communication_control(
+        self,
+        enable_disable: str,
+        *,
+        time_duration: int | None = None,
+        password: str | None = None,
+    ) -> None:
+        """Send DeviceCommunicationControl to the remote device.
+
+        *enable_disable* is one of ``"enable"``, ``"disable"``,
+        ``"disableInitiation"``.  *time_duration* (minutes) makes disable
+        temporary.  Safety-gated: denied in PRODUCTION.
+        """
+        ref = ObjectRef(device=self.device, object_id="device:any", data_type="any")
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=enable_disable,
+            encoded_bytes=b"",
+            description=f"DeviceCommunicationControl enableDisable={enable_disable}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("DeviceCommunicationControl denied by safety context")
+        try:
+            self._loop_thread.submit(
+                self._async_device_communication_control(enable_disable, time_duration, password),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(
+                f"DeviceCommunicationControl failed (mode={enable_disable}): {exc}"
+            ) from exc
+
+    # ------------------------------------------------------------------
     # Session lifecycle
     # ------------------------------------------------------------------
 
@@ -685,6 +1241,36 @@ def _extract_device_id(raw: str) -> int | None:
 
     m = re.search(r"/dev=(\d+)", raw, re.IGNORECASE)
     return int(m.group(1)) if m else None
+
+
+def _log_record_to_dict(record: Any) -> dict[str, Any]:
+    """Convert a bacpypes3 BACnetLogRecord to a plain Python dict."""
+    ts_raw = getattr(record, "timestamp", None)
+    ts: datetime | None = None
+    if ts_raw is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            ts = datetime.fromisoformat(str(ts_raw))
+
+    datum = getattr(record, "logDatum", None)
+    value: Any = None
+    if datum is not None:
+        for attr in (
+            "realValue",
+            "integerValue",
+            "booleanValue",
+            "enumValue",
+            "bitStringValue",
+        ):
+            raw_val = getattr(datum, attr, None)
+            if raw_val is not None:
+                with contextlib.suppress(Exception):
+                    value = bacnet_value_to_python(raw_val)
+                break
+
+    return {
+        "timestamp": ts,
+        "value": value,
+    }
 
 
 def _parse_status_flags(raw: Any) -> Quality:

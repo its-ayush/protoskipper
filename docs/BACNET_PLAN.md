@@ -1136,18 +1136,37 @@ finish it in a single PR.
     re-subscribe).
   * Out-of-order notifications surface as warnings.
 
-#### P7.B.9 Alarms & events ⬜
+#### P7.B.9 Alarms & events 🔶
 
-* **Goal:** Full A&E surface per §5.7: receive notifications,
-  acknowledge, summary calls.
+> **Partial.** `get_event_information()` (GetEventInformation loop with
+> cursor), `acknowledge_alarm()` (AcknowledgeAlarm, safety-gated) done.
+> Event-notification routing (ConfirmedEventNotification /
+> UnconfirmedEventNotification) and SubscribeEventNotification not yet
+> wired.  45 unit tests cover all new methods.
 
-#### P7.B.10 TrendLog / TrendLogMultiple / EventLog retrieval ⬜
+#### P7.B.10 TrendLog / TrendLogMultiple / EventLog retrieval 🔶
 
-#### P7.B.11 Schedule & Calendar read + write ⬜
+> **Partial.** `read_trend_log()` wraps `app.read_range()` for
+> `logBuffer` by position, sequence number, or time.  TrendLogMultiple
+> (separate `logBuffer` per object) and EventLog pending.
 
-#### P7.B.12 File services ⬜
+#### P7.B.11 Schedule & Calendar read + write 🔶
 
-#### P7.B.13 Device management ⬜
+> **Partial.** `read_schedule()` (RPM of 10 schedule properties) and
+> `write_schedule_default()` done.  Full `weeklySchedule` /
+> `exceptionSchedule` encoding helpers pending.
+
+#### P7.B.12 File services 🔶
+
+> **Partial.** `read_file()` (AtomicReadFile stream-access, chunked),
+> `write_file()` (AtomicWriteFile, safety-gated) done.  Record-access
+> mode pending.
+
+#### P7.B.13 Device management 🔶
+
+> **Partial.** `time_sync()` / UTC variant, `reinitialize_device()`
+> (safety-gated), `device_communication_control()` (safety-gated) done.
+> ConfirmedTextMessage and ConfirmedPrivateTransfer pending.
 
 * **Goal:** TimeSync, UTCTimeSync, ReinitializeDevice,
   DeviceCommunicationControl, ConfirmedTextMessage,
