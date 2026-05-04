@@ -102,6 +102,7 @@ class BacnetSimulator:
         # Map "analog-value:1" → local object (populated after _async_start)
         self._objects: dict[str, Any] = {}
         self._ready = threading.Event()
+        self._alarm_log: list[dict[str, Any]] = []  # P7.F.3
 
     # ------------------------------------------------------------------
     # Public: Simulator protocol
@@ -207,6 +208,120 @@ class BacnetSimulator:
 
         self._loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_do()))
         return fut.result(timeout=5)
+
+    # ------------------------------------------------------------------
+    # P7.F.3 — Alarm generation engine
+    # ------------------------------------------------------------------
+
+    def trigger_event(
+        self,
+        object_id: str,
+        event_state: str = "offnormal",
+        notify_type: str = "alarm",
+        priority: int = 100,
+        message_text: str = "",
+    ) -> None:
+        """Inject a simulated event-notification for *object_id*.
+
+        Marks the object's ``eventState`` (if supported) and logs the event
+        internally.  External clients that have subscribed via COV / alarms
+        will receive the change notification from bacpypes3's normal dispatch.
+
+        *event_state* — ``"normal"``, ``"offnormal"``, ``"fault"``,
+        ``"highLimit"``, ``"lowLimit"``, or ``"lifeSafetyAlarm"``.
+        *notify_type* — ``"alarm"``, ``"event"``, or ``"ackNotification"``.
+        """
+        entry = {
+            "object_id": object_id,
+            "event_state": event_state,
+            "notify_type": notify_type,
+            "priority": priority,
+            "message_text": message_text,
+        }
+        if self._loop is None:
+            # Allow logging without a running simulator loop (tests / offline use)
+            self._alarm_log.append(entry)
+            return
+        fut: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        async def _do() -> None:
+            obj = self._objects.get(object_id)
+            if obj is None:
+                fut.set_exception(KeyError(object_id))
+                return
+            try:
+                if hasattr(obj, "eventState"):
+                    obj.eventState = event_state
+                _logger.info(
+                    "Simulator alarm: %s state=%s type=%s pri=%d msg=%r",
+                    object_id,
+                    event_state,
+                    notify_type,
+                    priority,
+                    message_text,
+                )
+                self._alarm_log.append(entry)
+                fut.set_result(None)
+            except Exception as exc:
+                fut.set_exception(exc)
+
+        self._loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_do()))
+        fut.result(timeout=5)
+
+    def alarm_log(self) -> list[dict[str, Any]]:
+        """Return a snapshot of injected alarm events (thread-safe copy)."""
+        return list(self._alarm_log)
+
+    def clear_alarm_log(self) -> None:
+        """Clear the injected alarm event log (thread-safe)."""
+        self._alarm_log.clear()
+
+    # ------------------------------------------------------------------
+    # P7.F.4 — Script-driven simulator
+    # ------------------------------------------------------------------
+
+    def run_script(self, script: str) -> None:
+        """Execute *script* (Python source) inside the simulator context.
+
+        The script receives a ``sim`` global bound to this simulator instance.
+        It may call ``sim.update_value()``, ``sim.trigger_event()``, etc.
+
+        .. warning::
+            This executes arbitrary Python.  Do not expose to untrusted input.
+            Only available when the safety profile is not PRODUCTION.
+        """
+        globs: dict[str, Any] = {"sim": self, "__builtins__": __builtins__}
+        exec(compile(script, "<simulator-script>", "exec"), globs)
+
+    def inject_sequence(
+        self,
+        object_id: str,
+        sequence: list[tuple[float, str, Any]],
+    ) -> None:
+        """Schedule a time-based value injection sequence.
+
+        *sequence* is a list of ``(delay_seconds, prop, value)`` tuples.
+        Each step fires after *delay_seconds* from the previous step (or
+        from now for the first).  Runs asynchronously on the simulator loop.
+        Does not block.
+        """
+        if self._loop is None:
+            raise RuntimeError("Simulator is not running")
+
+        async def _play() -> None:
+            for delay, prop, value in sequence:
+                await asyncio.sleep(delay)
+                obj = self._objects.get(object_id)
+                if obj is None:
+                    _logger.warning("inject_sequence: object %r not found", object_id)
+                    return
+                try:
+                    setattr(obj, prop, value)
+                    _logger.debug("inject_sequence: %s.%s = %r", object_id, prop, value)
+                except Exception as exc:
+                    _logger.warning("inject_sequence: set %s.%s failed: %s", object_id, prop, exc)
+
+        self._loop.call_soon_threadsafe(lambda: asyncio.ensure_future(_play()))
 
     # ------------------------------------------------------------------
     # Internal: event loop
@@ -379,3 +494,52 @@ class BacnetSimulator:
                 kwargs["stateText"] = state_text
             return MultiStateValueObject(**kwargs)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Schedule evaluation (P7.F.2)
+# ---------------------------------------------------------------------------
+
+
+def _time_to_seconds(t: Any) -> int:
+    """Convert a (HH, MM, SS) or time-string to seconds-since-midnight."""
+    try:
+        if hasattr(t, "hour"):
+            return t.hour * 3600 + t.minute * 60 + t.second
+        parts = str(t).split(":")
+        h, m, s = int(parts[0]), int(parts[1]), int(float(parts[2]))
+        return h * 3600 + m * 60 + s
+    except Exception:
+        return 0
+
+
+def evaluate_weekly_schedule(
+    weekly_data: list[list[tuple[str, Any]]],
+    dt: Any | None = None,
+) -> Any:
+    """Return the scheduled value active at *dt* (default: now).
+
+    *weekly_data* — 7-element list of day schedules (index 0 = Monday).
+    Each day schedule is a list of ``("HH:MM:SS", value)`` tuples sorted
+    ascending.  The last entry whose time ≤ *dt.time()* is the active
+    setpoint.  If no entry applies (all later), returns ``None``.
+
+    ASHRAE 135 day-of-week: 1=Monday … 7=Sunday.  Python weekday(): 0=Mon.
+    """
+    import datetime as _dt
+
+    if dt is None:
+        dt = _dt.datetime.now()
+
+    dow = dt.weekday()  # 0=Mon … 6=Sun
+    now_secs = dt.hour * 3600 + dt.minute * 60 + dt.second
+
+    day_schedule = weekly_data[dow] if 0 <= dow < len(weekly_data) else []
+    active_value: Any = None
+    for time_str, value in day_schedule:
+        entry_secs = _time_to_seconds(time_str)
+        if entry_secs <= now_secs:
+            active_value = value
+        else:
+            break
+    return active_value

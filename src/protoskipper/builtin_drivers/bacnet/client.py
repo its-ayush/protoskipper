@@ -169,6 +169,8 @@ class BacnetIpSession(DriverSession):
         self._next_process_id = 1
         self._closed = False
         self._apdu_timeout = self._profile.default_apdu_timeout_ms / 1000.0
+        # P7.B.9 — event-notification callbacks (process_id → callable)
+        self._event_callbacks: list[Any] = []
 
         # Create the bacpypes3 application on the event loop thread
         self._loop_thread.submit(self._async_create_app(), timeout=10)
@@ -199,16 +201,18 @@ class BacnetIpSession(DriverSession):
         self._app = NormalApplication(local_device, Address("0.0.0.0"))
 
         # Hook COV notification handlers
-        _orig_unconf = getattr(self._app, "do_UnconfirmedCOVNotificationRequest", None)
-        _orig_conf = getattr(self._app, "do_ConfirmedCOVNotificationRequest", None)
-
         async def _handle_cov(apdu: Any) -> None:
             await self._async_dispatch_cov(apdu)
-            if _orig_unconf and _orig_conf:
-                pass  # parent handlers not typically overridden
 
         self._app.do_UnconfirmedCOVNotificationRequest = _handle_cov
         self._app.do_ConfirmedCOVNotificationRequest = _handle_cov
+
+        # Hook event-notification handlers (P7.B.9)
+        async def _handle_event(apdu: Any) -> None:
+            await self._async_dispatch_event(apdu)
+
+        self._app.do_ConfirmedEventNotificationRequest = _handle_event
+        self._app.do_UnconfirmedEventNotificationRequest = _handle_event
 
     async def _async_dispatch_cov(self, apdu: Any) -> None:
         pid = int(apdu.subscriberProcessIdentifier)
@@ -236,6 +240,34 @@ class BacnetIpSession(DriverSession):
                     )
                 except Exception as exc:
                     _logger.warning("COV callback raised: %s", exc)
+
+    async def _async_dispatch_event(self, apdu: Any) -> None:
+        """Dispatch a received EventNotification to registered callbacks."""
+        try:
+            obj_type, inst = apdu.eventObjectIdentifier
+            oid_str = object_id_str(str(obj_type), int(inst))
+        except Exception:
+            oid_str = "unknown:0"
+
+        event_dict = {
+            "object_id": oid_str,
+            "process_identifier": int(getattr(apdu, "processIdentifier", 0)),
+            "initiating_device_id": int(getattr(apdu, "initiatingDeviceIdentifier", [None, 0])[1])
+            if hasattr(getattr(apdu, "initiatingDeviceIdentifier", None), "__iter__")
+            else 0,
+            "event_state": str(getattr(apdu, "eventState", "normal")),
+            "acked_transitions": getattr(apdu, "ackedTransitions", None),
+            "timestamp": str(getattr(apdu, "timeStamp", "")),
+            "notify_type": str(getattr(apdu, "notifyType", "alarm")),
+            "message_text": str(getattr(apdu, "messageText", "") or ""),
+            "priority": int(getattr(apdu, "priority", 0)),
+            "notification_class": int(getattr(apdu, "notificationClass", 0)),
+        }
+        for cb in list(self._event_callbacks):
+            try:
+                cb(event_dict)
+            except Exception as exc:
+                _logger.warning("Event notification callback raised: %s", exc)
 
     async def _async_close_app(self) -> None:
         if self._app is not None:
@@ -654,6 +686,218 @@ class BacnetIpSession(DriverSession):
         if password:
             kwargs["password"] = password
         request = DeviceCommunicationControlRequest(**kwargs)
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.B.13 extra — ConfirmedTextMessage / ConfirmedPrivateTransfer
+    # ------------------------------------------------------------------
+
+    async def _async_confirmed_text_message(
+        self,
+        message_class: int | str,
+        message_priority: str,
+        message: str,
+    ) -> None:
+        """Send ConfirmedTextMessage to the remote device."""
+        from bacpypes3.apdu import ConfirmedTextMessageRequest
+        from bacpypes3.basetypes import ConfirmedTextMessageRequestMessageClass
+        from bacpypes3.pdu import Address
+
+        if isinstance(message_class, int):
+            msg_cls = ConfirmedTextMessageRequestMessageClass(numeric=message_class)
+        else:
+            msg_cls = ConfirmedTextMessageRequestMessageClass(characterstring=str(message_class))
+        request = ConfirmedTextMessageRequest(
+            textMessageSourceDevice=("device", self._remote_device_id or 0),
+            messageClass=msg_cls,
+            messagePriority=message_priority,
+            message=message,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    async def _async_confirmed_private_transfer(
+        self,
+        vendor_id: int,
+        service_number: int,
+        service_parameters: bytes,
+    ) -> Any:
+        """Send ConfirmedPrivateTransfer and return the vendor-specific response."""
+        from bacpypes3.apdu import ConfirmedPrivateTransferRequest
+        from bacpypes3.pdu import Address
+
+        request = ConfirmedPrivateTransferRequest(
+            vendorID=vendor_id,
+            serviceNumber=service_number,
+            serviceParameters=service_parameters,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        return await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.B.10 extra — TrendLogMultiple + EventLog
+    # ------------------------------------------------------------------
+
+    async def _async_read_trend_log_multiple(
+        self,
+        object_id: str,
+        log_index: int,
+        range_type: str,
+        first: int,
+        count: int,
+        date_str: str,
+        time_str: str,
+    ) -> list[Any]:
+        """ReadRange logBuffer from a specific channel of a TrendLogMultiple."""
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import ObjectIdentifier, PropertyIdentifier, Unsigned
+
+        obj_type, instance = parse_object_id(object_id)
+        oid = ObjectIdentifier((obj_type, instance))
+        prop = PropertyIdentifier("logBuffer")
+        address = Address(self._remote_addr)
+        range_params = (range_type, first, date_str, time_str, count)
+
+        # TrendLogMultiple uses array index to select the channel
+        result = await self._app.read_range(
+            address,
+            oid,
+            prop,
+            array_index=Unsigned(log_index) if log_index > 0 else None,
+            range_params=range_params,
+        )
+        if result is None or hasattr(result, "errorClass"):
+            return []
+        records: list[Any] = []
+        for item in result if hasattr(result, "__iter__") else []:
+            try:
+                records.append(_log_record_to_dict(item))
+            except Exception as exc:
+                _logger.debug("Malformed TLM log record: %s", exc)
+        return records
+
+    # ------------------------------------------------------------------
+    # P7.B.11 extra — weeklySchedule / exceptionSchedule write helpers
+    # ------------------------------------------------------------------
+
+    async def _async_write_weekly_schedule(
+        self,
+        object_id: str,
+        weekly_data: list[list[tuple[str, Any]]],
+    ) -> None:
+        """Write a complete weeklySchedule to a Schedule object.
+
+        *weekly_data* is a list of 7 day-lists (Monday=0 to Sunday=6).
+        Each day-list is a list of ``(time_str, value)`` tuples where
+        *time_str* is ``"HH:MM:SS"`` and *value* is the typed setpoint.
+        """
+        from bacpypes3.apdu import WritePropertyRequest
+        from bacpypes3.basetypes import (
+            PropertyIdentifier as BAPropId,
+        )
+        from bacpypes3.basetypes import (
+            TimeValue,
+            WeeklySchedule,
+        )
+        from bacpypes3.pdu import Address
+        from bacpypes3.primitivedata import ObjectIdentifier, Time
+
+        obj_type, instance = parse_object_id(object_id)
+        day_schedules = []
+        for day_list in weekly_data[:7]:
+            time_values = []
+            for time_str, val in day_list:
+                t = Time(time_str)
+                bac_val = python_to_bacnet_value("real", val) if isinstance(val, float) else val
+                time_values.append(TimeValue(time=t, value=bac_val))
+            day_schedules.append(time_values)
+
+        ws = WeeklySchedule(day_schedules)
+        request = WritePropertyRequest(
+            objectIdentifier=ObjectIdentifier((obj_type, instance)),
+            propertyIdentifier=BAPropId("weeklySchedule"),
+            propertyValue=ws,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        await self._app.request(request)
+
+    # ------------------------------------------------------------------
+    # P7.B.12 extra — AtomicReadFile record-access mode
+    # ------------------------------------------------------------------
+
+    async def _async_read_file_records(
+        self,
+        file_object_id: str,
+        start_record: int,
+        record_count: int,
+    ) -> list[bytes]:
+        """AtomicReadFile (record access) — read *record_count* records."""
+        from bacpypes3.apdu import AtomicReadFileRequest
+        from bacpypes3.basetypes import (
+            AtomicReadFileRequestAccessMethodChoice,
+            AtomicReadFileRequestAccessMethodChoiceRecordAccess,
+        )
+        from bacpypes3.pdu import Address
+
+        obj_type, instance = parse_object_id(file_object_id)
+        record_access = AtomicReadFileRequestAccessMethodChoiceRecordAccess(
+            fileStartRecord=start_record,
+            requestedRecordCount=record_count,
+        )
+        access = AtomicReadFileRequestAccessMethodChoice(recordAccess=record_access)
+        request = AtomicReadFileRequest(
+            fileIdentifier=(obj_type, instance),
+            accessMethod=access,
+        )
+        request.pduDestination = Address(self._remote_addr)
+        response = await self._app.request(request)
+
+        if response is None or not hasattr(response, "accessMethod"):
+            return []
+        records_raw = getattr(response.accessMethod.recordAccess, "fileRecordData", None) or []
+        return [bytes(r) for r in records_raw]
+
+    # ------------------------------------------------------------------
+    # P7.B.7 extra — WriteGroup
+    # ------------------------------------------------------------------
+
+    async def _async_write_group(
+        self,
+        group_number: int,
+        write_priority: int,
+        change_list: list[dict[str, Any]],
+    ) -> None:
+        """Send WriteGroup unconfirmed request (Add. 135-2020e).
+
+        *change_list* is a list of dicts with keys ``"channel"`` (int) and
+        ``"value"`` (Python-typed value).  If bacpypes3 does not expose
+        WriteGroupRequest (version < 0.0.107), logs a warning and no-ops.
+        """
+        try:
+            from bacpypes3.apdu import WriteGroupRequest
+        except ImportError:
+            _logger.warning("WriteGroupRequest not available in this bacpypes3 version; skipped")
+            return
+
+        from bacpypes3.pdu import Address
+
+        channel_values = []
+        for ch in change_list:
+            from bacpypes3.basetypes import ChannelValue
+
+            bac_val = (
+                python_to_bacnet_value("real", ch["value"])
+                if isinstance(ch.get("value"), float)
+                else ch.get("value")
+            )
+            channel_values.append(ChannelValue(channel=int(ch["channel"]), value=bac_val))
+
+        request = WriteGroupRequest(
+            groupNumber=group_number,
+            writePriority=write_priority,
+            changeList=channel_values,
+        )
         request.pduDestination = Address(self._remote_addr)
         await self._app.request(request)
 
@@ -1430,6 +1674,238 @@ class BacnetIpSession(DriverSession):
             raise ProtocolError(
                 f"DeviceCommunicationControl failed (mode={enable_disable}): {exc}"
             ) from exc
+
+    def confirmed_text_message(
+        self,
+        message: str,
+        *,
+        message_class: int | str = 0,
+        message_priority: str = "normal",
+    ) -> None:
+        """Send ConfirmedTextMessage to the remote device.
+
+        *message_class* may be an integer (numeric class) or string.
+        *message_priority* is ``"normal"`` or ``"urgent"``.
+        Safety-gated.
+        """
+        ref = ObjectRef(device=self.device, object_id="device:any", data_type="any")
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=message,
+            encoded_bytes=message.encode(),
+            description=f"ConfirmedTextMessage class={message_class} priority={message_priority}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("ConfirmedTextMessage denied by safety context")
+        try:
+            self._loop_thread.submit(
+                self._async_confirmed_text_message(message_class, message_priority, message),
+                timeout=self._apdu_timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"ConfirmedTextMessage failed: {exc}") from exc
+
+    def confirmed_private_transfer(
+        self,
+        vendor_id: int,
+        service_number: int,
+        service_parameters: bytes = b"",
+    ) -> Any:
+        """Send ConfirmedPrivateTransfer and return the vendor response.
+
+        The returned value is the raw bacpypes3 APDU (vendor-specific).
+        Safety-gated.
+        """
+        ref = ObjectRef(device=self.device, object_id="device:any", data_type="any")
+        intent = WriteIntent(
+            object_ref=ref,
+            requested_value=service_parameters,
+            encoded_bytes=service_parameters,
+            description=f"ConfirmedPrivateTransfer vendor={vendor_id} service={service_number}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("ConfirmedPrivateTransfer denied by safety context")
+        try:
+            return self._loop_thread.submit(
+                self._async_confirmed_private_transfer(
+                    vendor_id, service_number, service_parameters
+                ),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"ConfirmedPrivateTransfer failed: {exc}") from exc
+
+    def read_trend_log_multiple(
+        self,
+        ref: ObjectRef,
+        log_index: int = 1,
+        *,
+        range_type: str = "p",
+        first: int = 1,
+        count: int = 100,
+        date_str: str = "2000-01-01",
+        time_str: str = "00:00:00",
+    ) -> list[Any]:
+        """Read a channel's logBuffer from a TrendLogMultiple object.
+
+        *log_index* selects the array element (1-based) within the
+        TrendLogMultiple ``logBuffer`` property array.
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_trend_log_multiple(
+                    ref.object_id,
+                    log_index,
+                    range_type=range_type,
+                    first=first,
+                    count=count,
+                    date_str=date_str,
+                    time_str=time_str,
+                ),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(
+                f"ReadRange (TrendLogMultiple) failed for {ref.object_id}: {exc}"
+            ) from exc
+
+    def read_event_log(
+        self,
+        ref: ObjectRef,
+        *,
+        range_type: str = "p",
+        first: int = 1,
+        count: int = 100,
+        date_str: str = "2000-01-01",
+        time_str: str = "00:00:00",
+    ) -> list[Any]:
+        """Read logBuffer from an EventLog object.
+
+        Uses ReadRange on the ``logBuffer`` property (same wire path as
+        TrendLog but the records are ``BACnetEventLogRecord`` structures).
+        """
+        return self.read_range(
+            ref,
+            "logBuffer",
+            range_type=range_type,
+            first=first,
+            count=count,
+            date_str=date_str,
+            time_str=time_str,
+        )
+
+    def write_weekly_schedule(
+        self,
+        ref: ObjectRef,
+        weekly_data: list[list[tuple[str, Any]]],
+    ) -> WriteResult:
+        """Write a complete ``weeklySchedule`` to a Schedule object.
+
+        *weekly_data* — list of 7 day-lists (index 0 = Monday, 6 = Sunday).
+        Each day-list is a list of ``(time_str, value)`` tuples, e.g.
+        ``[("06:00:00", 21.0), ("18:00:00", 18.0)]``.
+        Safety-gated.
+        """
+        ref_dev = ObjectRef(device=self.device, object_id=ref.object_id, data_type="any")
+        intent = WriteIntent(
+            object_ref=ref_dev,
+            requested_value=weekly_data,
+            encoded_bytes=b"",
+            description=f"WriteWeeklySchedule {ref.object_id}",
+        )
+        if not self.safety.require_write_authorization(intent):
+            raise WriteAuthorizationError("WriteWeeklySchedule denied by safety context")
+        ts = datetime.now(tz=timezone.utc)
+        try:
+            self._loop_thread.submit(
+                self._async_write_weekly_schedule(ref.object_id, weekly_data),
+                timeout=self._apdu_timeout + 4,
+            )
+        except CommError:
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error="APDU timeout")
+            self.safety.record_write_outcome(result)
+            raise
+        except Exception as exc:
+            result = WriteResult(intent=intent, success=False, timestamp=ts, error=str(exc))
+            self.safety.record_write_outcome(result)
+            raise ProtocolError(f"WriteWeeklySchedule failed for {ref.object_id}: {exc}") from exc
+        result = WriteResult(intent=intent, success=True, timestamp=ts)
+        self.safety.record_write_outcome(result)
+        return result
+
+    def read_file_records(
+        self,
+        ref: ObjectRef,
+        start_record: int = 0,
+        record_count: int = 16,
+    ) -> list[bytes]:
+        """Read records from a BACnet File object using AtomicReadFile record-access mode.
+
+        Returns a list of raw ``bytes`` records.  Use :meth:`read_file` for
+        stream-access (the more common mode).
+        """
+        try:
+            return self._loop_thread.submit(
+                self._async_read_file_records(ref.object_id, start_record, record_count),
+                timeout=60,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(
+                f"AtomicReadFile (record-access) failed for {ref.object_id}: {exc}"
+            ) from exc
+
+    def write_group(
+        self,
+        group_number: int,
+        write_priority: int,
+        change_list: list[dict[str, Any]],
+    ) -> None:
+        """Send WriteGroup unconfirmed request (BACnet Add. 135-2020e).
+
+        *change_list* — list of dicts with keys ``"channel"`` (int, 1-based)
+        and ``"value"`` (typed Python value).  This is an unconfirmed
+        broadcast service so no acknowledgment is returned.
+        If the installed bacpypes3 version does not have ``WriteGroupRequest``
+        the call is a silent no-op with a logged warning.
+        """
+        try:
+            self._loop_thread.submit(
+                self._async_write_group(group_number, write_priority, change_list),
+                timeout=self._apdu_timeout + 2,
+            )
+        except CommError:
+            raise
+        except Exception as exc:
+            raise ProtocolError(f"WriteGroup failed: {exc}") from exc
+
+    def subscribe_events(self, callback: Any) -> None:
+        """Register *callback* to receive event-notification dicts.
+
+        *callback* is called with a single dict argument containing keys:
+        ``object_id``, ``process_identifier``, ``initiating_device_id``,
+        ``event_state``, ``timestamp``, ``notify_type``, ``message_text``,
+        ``priority``, ``notification_class``.
+
+        There is no handle returned; call :meth:`unsubscribe_events` with
+        the same callable to remove it.
+        """
+        if callback not in self._event_callbacks:
+            self._event_callbacks.append(callback)
+
+    def unsubscribe_events(self, callback: Any) -> None:
+        """Remove a previously registered event-notification callback."""
+        import contextlib
+
+        with contextlib.suppress(ValueError):
+            self._event_callbacks.remove(callback)
 
     # ------------------------------------------------------------------
     # P7.B.7 — WritePropertyMultiple (public API)
