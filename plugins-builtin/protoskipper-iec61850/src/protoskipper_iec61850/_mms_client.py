@@ -40,6 +40,7 @@ A :class:`MmsClient` instance must be used from a single thread only.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -379,6 +380,26 @@ class LogEntry:
     entry_id: bytes
     occurrence_time_ms: int
     variables: list[tuple[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class FileInfo:
+    """Metadata for a single entry in a server-side file directory.
+
+    Attributes
+    ----------
+    name:
+        File path as returned by the server (e.g. ``"COMTRADE/fault01.cfg"``).
+    size:
+        File size in bytes.  0 when the server does not report a size.
+    last_modified_ms:
+        UTC timestamp of the last modification in milliseconds since the
+        Unix epoch.  0 when not available.
+    """
+
+    name: str
+    size: int
+    last_modified_ms: int
 
 
 def _mms_value_to_python(lib: Any, val: Any) -> Any:
@@ -1365,6 +1386,117 @@ class MmsClient:
                 error_code=error,
             )
         return self._decode_journal_entries(lib, entries_ll, log_ref), bool(more_follows)
+
+    # ---------------------------------------------------------------------------
+    # File services (P8.B.8)
+    # ---------------------------------------------------------------------------
+
+    def list_files(self, directory: str | None = None) -> list[FileInfo]:
+        """Return file-directory entries from the IED's virtual file store.
+
+        Implements the IEC 61850-7-2 *GetFileAttributeValues* ACSI service via
+        ``IedConnection_getFileDirectory``.
+
+        Parameters
+        ----------
+        directory:
+            Remote directory path (e.g. ``"COMTRADE"``), or ``None`` /
+            empty string for the root directory.
+
+        Returns
+        -------
+        list[FileInfo]
+            One :class:`FileInfo` per file or sub-directory reported.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        dir_arg: str = directory or ""
+        ll, error = lib.IedConnection_getFileDirectory(self._con, dir_arg)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetFileDirectory({dir_arg!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        result: list[FileInfo] = []
+        try:
+            node = lib.LinkedList_getNext(ll)
+            while node is not None:
+                entry = lib.LinkedList_getData(node)
+                name: str = lib.FileDirectoryEntry_getFileName(entry) or ""
+                size: int = int(lib.FileDirectoryEntry_getFileSize(entry))
+                last_mod: int = int(lib.FileDirectoryEntry_getLastModified(entry))
+                result.append(FileInfo(name=name, size=size, last_modified_ms=last_mod))
+                node = lib.LinkedList_getNext(node)
+        finally:
+            lib.LinkedList_destroyDeep(ll, lib.FileDirectoryEntry_destroy)
+        return result
+
+    def get_file(self, remote_path: str) -> bytes:
+        """Download a file from the IED's virtual file store.
+
+        Implements the IEC 61850-7-2 *GetFile* ACSI service via
+        ``IedConnection_getFile``.  The file is received in chunks via an
+        internal handler and assembled into a single :class:`bytes` object.
+
+        Parameters
+        ----------
+        remote_path:
+            Path of the file on the server (e.g. ``"COMTRADE/fault01.cfg"``).
+
+        Returns
+        -------
+        bytes
+            Complete file content.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        chunks: list[bytes] = []
+
+        def _handler(buffer: Any, bytes_read: int) -> bool:
+            """Accumulate received data chunks into *chunks*."""
+            with contextlib.suppress(Exception):
+                chunks.append(bytes(bytearray(buffer[:bytes_read])))
+            return True  # continue download
+
+        _total, error = lib.IedConnection_getFile(self._con, remote_path, _handler, None)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"GetFile({remote_path!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        return b"".join(chunks)
+
+    def delete_file(self, remote_path: str) -> None:
+        """Delete a file from the IED's virtual file store.
+
+        Implements the IEC 61850-7-2 *DeleteFile* ACSI service via
+        ``IedConnection_deleteFile``.
+
+        Parameters
+        ----------
+        remote_path:
+            Path of the file to delete on the server.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK ``IedClientError``.
+        """
+        lib = self._lib
+        error = lib.IedConnection_deleteFile(self._con, remote_path)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"DeleteFile({remote_path!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
 
     # ---------------------------------------------------------------------------
     # Directory services (P8.B.3)

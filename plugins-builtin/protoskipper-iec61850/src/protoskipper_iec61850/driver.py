@@ -58,6 +58,7 @@ from protoskipper_iec61850._mms_client import (
     FC_ST,
     TRG_OPS_DATA_CHANGE,
     TRG_OPS_QUALITY_CHANGE,
+    FileInfo,
     LogEntry,
     MmsClient,
     MmsConnectError,
@@ -581,6 +582,55 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         return self._client.query_log_after(log_ref, entry_id, timestamp_ms)
+
+    # ------------------------------------------------------------------
+    # File services (P8.B.8)
+    # ------------------------------------------------------------------
+
+    def list_files(self, directory: str | None = None) -> list[FileInfo]:
+        """Return file directory entries from the IED.
+
+        Delegates to :meth:`MmsClient.list_files`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.list_files(directory)
+
+    def get_file(self, remote_path: str) -> bytes:
+        """Download a file from the IED.
+
+        Delegates to :meth:`MmsClient.get_file`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.get_file(remote_path)
+
+    def delete_file(self, remote_path: str) -> None:
+        """Delete a file on the IED.
+
+        Delegates to :meth:`MmsClient.delete_file`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        self._client.delete_file(remote_path)
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""

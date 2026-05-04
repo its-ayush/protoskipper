@@ -1246,3 +1246,171 @@ class TestSessionLog:
             session.query_log_by_time("LD0/LLN0$GL", 0, 1000)
         with pytest.raises(MmsDirectoryError):
             session.query_log_after("LD0/LLN0$GL", b"\x00", 0)
+
+
+# ---------------------------------------------------------------------------
+# P8.B.8 — File services
+# ---------------------------------------------------------------------------
+
+
+class TestMmsClientListFiles:
+    """MmsClient.list_files() wraps IedConnection_getFileDirectory."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        dir_ll = object()  # opaque sentinel for the LinkedList
+        lib.IedConnection_getFileDirectory.return_value = (dir_ll, 0)
+        # No entries by default
+        lib.LinkedList_getNext.return_value = None
+        return client, lib, dir_ll
+
+    def test_returns_empty_list_for_empty_directory(self) -> None:
+        client, _lib, _ = self._make_client()
+        result = client.list_files()
+        assert result == []
+
+    def test_returns_file_info_list_on_success(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import FileInfo
+
+        client, lib, _dir_ll = self._make_client()
+        node1 = MagicMock()
+        entry1 = MagicMock()
+        lib.LinkedList_getNext.side_effect = [node1, None]
+        lib.LinkedList_getData.return_value = entry1
+        lib.FileDirectoryEntry_getFileName.return_value = "fault01.cfg"
+        lib.FileDirectoryEntry_getFileSize.return_value = 1024
+        lib.FileDirectoryEntry_getLastModified.return_value = 1_700_000_000_000
+
+        result = client.list_files("COMTRADE")
+        expected_info = FileInfo(name="fault01.cfg", size=1024, last_modified_ms=1_700_000_000_000)
+        assert result == [expected_info]
+
+    def test_ll_destroyed_on_success(self) -> None:
+        client, lib, dir_ll = self._make_client()
+        client.list_files()
+        lib.LinkedList_destroyDeep.assert_called_once_with(dir_ll, lib.FileDirectoryEntry_destroy)
+
+    def test_raises_mms_directory_error_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib, dir_ll = self._make_client()
+        lib.IedConnection_getFileDirectory.return_value = (dir_ll, 22)  # OBJECT_DOES_NOT_EXIST
+        with pytest.raises(MmsDirectoryError):
+            client.list_files("MISSING")
+
+
+class TestMmsClientGetFile:
+    """MmsClient.get_file() wraps IedConnection_getFile."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        lib.IedConnection_getFile.return_value = (0, 0)
+        return client, lib
+
+    def test_returns_empty_bytes_when_no_chunks(self) -> None:
+        client, _lib = self._make_client()
+        result = client.get_file("COMTRADE/fault01.cfg")
+        assert result == b""
+
+    def test_handler_accumulates_chunks_into_bytes(self) -> None:
+        client, lib = self._make_client()
+
+        captured_handler = None
+
+        def _capture_getfile(con, filename, handler, param):  # type: ignore[no-untyped-def]
+            nonlocal captured_handler
+            captured_handler = handler
+            handler(bytearray(b"Hello, "), 7)
+            handler(bytearray(b"world!"), 6)
+            return (13, 0)
+
+        lib.IedConnection_getFile.side_effect = _capture_getfile
+        result = client.get_file("COMTRADE/data.cfg")
+        assert result == b"Hello, world!"
+
+    def test_raises_mms_directory_error_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib = self._make_client()
+        lib.IedConnection_getFile.return_value = (0, 20)  # IED_ERROR_TIMEOUT
+        with pytest.raises(MmsDirectoryError):
+            client.get_file("MISSING.cfg")
+
+
+class TestMmsClientDeleteFile:
+    """MmsClient.delete_file() wraps IedConnection_deleteFile."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        client = _make_mock_client_with_internals()
+        lib = client._lib
+        lib.IedConnection_deleteFile.return_value = 0  # IED_ERROR_OK
+        return client, lib
+
+    def test_success_does_not_raise(self) -> None:
+        client, _lib = self._make_client()
+        client.delete_file("COMTRADE/fault01.cfg")  # no exception
+
+    def test_raises_mms_directory_error_on_ied_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib = self._make_client()
+        lib.IedConnection_deleteFile.return_value = 21  # IED_ERROR_ACCESS_DENIED
+        with pytest.raises(MmsDirectoryError):
+            client.delete_file("PROTECTED/file.bin")
+
+
+class TestSessionFileServices:
+    """Iec61850MmsSession file service methods delegate to MmsClient."""
+
+    @pytest.fixture
+    def session_with_client(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    def test_list_files_delegates_to_client(self, session_with_client) -> None:
+        from protoskipper_iec61850._mms_client import FileInfo
+
+        expected = [FileInfo(name="fault01.cfg", size=512, last_modified_ms=0)]
+        session_with_client._client.list_files.return_value = expected
+        result = session_with_client.list_files("COMTRADE")
+        session_with_client._client.list_files.assert_called_once_with("COMTRADE")
+        assert result == expected
+
+    def test_get_file_delegates_to_client(self, session_with_client) -> None:
+        session_with_client._client.get_file.return_value = b"\xde\xad\xbe\xef"
+        result = session_with_client.get_file("COMTRADE/fault01.cfg")
+        session_with_client._client.get_file.assert_called_once_with("COMTRADE/fault01.cfg")
+        assert result == b"\xde\xad\xbe\xef"
+
+    def test_delete_file_delegates_to_client(self, session_with_client) -> None:
+        session_with_client.delete_file("COMTRADE/old.cfg")
+        session_with_client._client.delete_file.assert_called_once_with("COMTRADE/old.cfg")
+
+    def test_no_client_raises_mms_directory_error(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
+        with pytest.raises(MmsDirectoryError):
+            session.list_files()
+        with pytest.raises(MmsDirectoryError):
+            session.get_file("x.cfg")
+        with pytest.raises(MmsDirectoryError):
+            session.delete_file("x.cfg")
