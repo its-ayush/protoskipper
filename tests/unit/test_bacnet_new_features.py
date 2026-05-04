@@ -549,3 +549,235 @@ class TestDiffResult:
         mock_session = MagicMock()
         with pytest.raises(ValueError, match="expected"):
             PointsDiff(mock_session)
+
+
+# ---------------------------------------------------------------------------
+# P7.H.1 — BenchLayout / BenchDevice / TilePosition
+# ---------------------------------------------------------------------------
+
+
+class TestBenchLayout:
+    def test_empty_layout_defaults(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchLayout
+
+        layout = BenchLayout()
+        assert layout.name == "Untitled Bench"
+        assert layout.devices == []
+        assert layout.schema_version == 1
+
+    def test_add_device_auto_column(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice, BenchLayout
+
+        layout = BenchLayout()
+        d1 = BenchDevice(label="A", address="10.0.0.1")
+        d2 = BenchDevice(label="B", address="10.0.0.2")
+        layout.add_device(d1)
+        layout.add_device(d2)
+        # Second device should get col=1 auto-assigned
+        assert layout.devices[1].tile.col == 1
+
+    def test_remove_device_by_label(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice, BenchLayout
+
+        layout = BenchLayout()
+        layout.devices.append(BenchDevice(label="X", address="1.2.3.4"))
+        assert layout.remove_device("X") is True
+        assert layout.devices == []
+        assert layout.remove_device("X") is False
+
+    def test_get_device_by_label(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice, BenchLayout
+
+        layout = BenchLayout()
+        dev = BenchDevice(label="Target", address="5.6.7.8", device_id=42)
+        layout.devices.append(dev)
+        found = layout.get_device("Target")
+        assert found is dev
+        assert layout.get_device("Missing") is None
+
+    def test_pinned_points_max_3(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice
+
+        with pytest.raises(ValueError, match="pinned_points"):
+            BenchDevice(
+                label="X",
+                address="1.2.3.4",
+                pinned_points=["ai:1", "ai:2", "ai:3", "ai:4"],
+            )
+
+    def test_to_dict_roundtrip(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice, BenchLayout, TilePosition
+
+        dev = BenchDevice(
+            label="AHU-1",
+            protocol="bacnet.ip",
+            address="192.168.1.10",
+            device_id=100,
+            tile=TilePosition(col=2, row=1, color="#FF0000"),
+            pinned_points=["analog-input:1"],
+            notes="Test device",
+        )
+        layout = BenchLayout(name="Test Bench", devices=[dev])
+        d = layout.to_dict()
+        assert d["schema_version"] == 1
+        assert d["name"] == "Test Bench"
+        assert len(d["devices"]) == 1
+        assert d["devices"][0]["label"] == "AHU-1"
+        assert d["devices"][0]["tile"]["color"] == "#FF0000"
+
+        restored = BenchLayout.from_dict(d)
+        assert restored.name == "Test Bench"
+        assert len(restored.devices) == 1
+        assert restored.devices[0].label == "AHU-1"
+        assert restored.devices[0].tile.col == 2
+        assert restored.devices[0].pinned_points == ["analog-input:1"]
+
+    def test_save_load_json(self, tmp_path: Any) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchDevice, BenchLayout
+
+        layout = BenchLayout(name="JSON Test")
+        layout.devices.append(BenchDevice(label="D1", address="1.2.3.4"))
+        path = tmp_path / "test.bench.json"
+        layout.save(path, fmt="json")
+        restored = BenchLayout.load(path)
+        assert restored.name == "JSON Test"
+        assert restored.devices[0].label == "D1"
+
+    def test_load_unsupported_schema_version_raises(self, tmp_path: Any) -> None:
+        import json
+
+        from protoskipper.builtin_drivers.bacnet.bench import BenchLayout
+
+        path = tmp_path / "future.bench.json"
+        path.write_text(json.dumps({"schema_version": 999, "name": "X", "devices": []}))
+        with pytest.raises(ValueError, match="schema version"):
+            BenchLayout.load(path)
+
+    def test_load_missing_file_raises(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchLayout
+
+        with pytest.raises(FileNotFoundError):
+            BenchLayout.load("/no/such/file.bench.yaml")
+
+    def test_load_bad_extension_raises(self, tmp_path: Any) -> None:
+        from protoskipper.builtin_drivers.bacnet.bench import BenchLayout
+
+        path = tmp_path / "test.toml"
+        path.write_text("name = 'x'")
+        with pytest.raises(ValueError, match="extension"):
+            BenchLayout.load(path)
+
+
+# ---------------------------------------------------------------------------
+# P7.G.2 — FrameQuery DSL
+# ---------------------------------------------------------------------------
+
+
+class TestFrameQuery:
+    def _frame(self, **kwargs: Any) -> Any:
+        from protoskipper.builtin_drivers.bacnet.pcap import BACnetFrame
+
+        defaults: dict[str, Any] = {
+            "timestamp": 1.0,
+            "src": "192.168.1.1",
+            "dst": "192.168.1.2",
+            "service": "readProperty",
+            "bvlc_function": "Original-Unicast-NPDU",
+            "apdu_type": "Confirmed-Request",
+            "invoke_id": 5,
+            "hop_count": -1,
+        }
+        defaults.update(kwargs)
+        return BACnetFrame(**defaults)
+
+    def test_exact_match_service(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service == readProperty")
+        assert q.match(self._frame(service="readProperty"))
+        assert not q.match(self._frame(service="whoIs"))
+
+    def test_case_insensitive_string_match(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service == ReadProperty")
+        assert q.match(self._frame(service="readProperty"))
+
+    def test_contains_operator(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service ~= Property")
+        assert q.match(self._frame(service="readProperty"))
+        assert q.match(self._frame(service="writeProperty"))
+        assert not q.match(self._frame(service="whoIs"))
+
+    def test_not_equal(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service != whoIs")
+        assert q.match(self._frame(service="readProperty"))
+        assert not q.match(self._frame(service="whoIs"))
+
+    def test_numeric_greater_than(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("invoke_id > 3")
+        assert q.match(self._frame(invoke_id=5))
+        assert not q.match(self._frame(invoke_id=2))
+
+    def test_numeric_range(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("invoke_id >= 5 AND invoke_id <= 10")
+        assert q.match(self._frame(invoke_id=5))
+        assert q.match(self._frame(invoke_id=10))
+        assert not q.match(self._frame(invoke_id=4))
+        assert not q.match(self._frame(invoke_id=11))
+
+    def test_or_expression(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service == whoIs OR service == iAm")
+        assert q.match(self._frame(service="whoIs"))
+        assert q.match(self._frame(service="iAm"))
+        assert not q.match(self._frame(service="readProperty"))
+
+    def test_not_expression(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("NOT (service == whoIs)")
+        assert q.match(self._frame(service="readProperty"))
+        assert not q.match(self._frame(service="whoIs"))
+
+    def test_src_filter(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("src == 10.0.0.1")
+        assert q.match(self._frame(src="10.0.0.1"))
+        assert not q.match(self._frame(src="10.0.0.2"))
+
+    def test_unknown_field_raises_syntax_error(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        with pytest.raises(SyntaxError, match="Unknown field"):
+            FrameQuery("badfield == x")
+
+    def test_unknown_op_raises_syntax_error(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        with pytest.raises(SyntaxError, match="Unknown operator"):
+            FrameQuery("service ?? readProperty")
+
+    def test_repr(self) -> None:
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service == whoIs")
+        assert "whoIs" in repr(q)
+
+    def test_string_query_accepted_by_search_method(self) -> None:
+        """PcapReader.search() accepts a plain string as well as FrameQuery."""
+        from protoskipper.builtin_drivers.bacnet.pcap import FrameQuery
+
+        q = FrameQuery("service == readProperty")
+        # Ensure match() works
+        assert q.match(self._frame(service="readProperty"))

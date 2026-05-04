@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["BACnetFrame", "PcapReader", "PcapUnavailable"]
+__all__ = ["BACnetFrame", "FrameQuery", "PcapReader", "PcapUnavailable"]
 
 # BACnet/IP UDP port
 BACNET_PORT = 47808  # 0xBAC0
@@ -225,6 +225,32 @@ class PcapReader:
                 continue
             yield frame
 
+    def search(
+        self,
+        query: FrameQuery | str,
+    ) -> Generator[BACnetFrame, None, None]:
+        """Iterate over frames that match a :class:`FrameQuery` or expression string.
+
+        Parameters
+        ----------
+        query:
+            A compiled :class:`FrameQuery` or a raw expression string.
+
+        Examples::
+
+            for frame in reader.search("service == readProperty"):
+                print(frame)
+
+            q = FrameQuery("bvlc == Forwarded-NPDU OR service ~= Who")
+            for frame in reader.search(q):
+                print(frame)
+        """
+        if isinstance(query, str):
+            query = FrameQuery(query)
+        for frame in self.frames():
+            if query.match(frame):
+                yield frame
+
     def count(self) -> int:
         """Return the total number of BACnet/IP frames in the capture."""
         return sum(1 for _ in self.frames())
@@ -329,3 +355,249 @@ class PcapReader:
             frame.invoke_id = data[1]
             service = data[2]
             frame.service = CONFIRMED_SERVICES.get(service, f"ack-service-{service}")
+
+
+# ---------------------------------------------------------------------------
+# P7.G.2 — Frame search and filter language
+# ---------------------------------------------------------------------------
+
+_FIELD_ALIASES: dict[str, str] = {
+    # Short-hand → BACnetFrame attribute name
+    "src": "src",
+    "dst": "dst",
+    "svc": "service",
+    "service": "service",
+    "bvlc": "bvlc_function",
+    "bvlc_func": "bvlc_function",
+    "apdu": "apdu_type",
+    "apdu_type": "apdu_type",
+    "invoke": "invoke_id",
+    "invoke_id": "invoke_id",
+    "hop": "hop_count",
+    "hop_count": "hop_count",
+    "t": "timestamp",
+    "ts": "timestamp",
+    "timestamp": "timestamp",
+}
+
+
+def _compile_predicate(expr: str):  # type: ignore[return]
+    """Compile a filter expression string into a callable predicate.
+
+    Grammar (whitespace-insensitive)::
+
+        expr     = term ( ( "AND" | "OR" ) term )*
+        term     = "NOT" term
+                 | "(" expr ")"
+                 | comparison
+        comparison = field op value
+        field    = one of the keys in _FIELD_ALIASES
+        op       = "==" | "!=" | "~=" | ">" | ">=" | "<" | "<="
+        value    = quoted-string | unquoted-token | number
+
+    Operators:
+        ``==``  exact match (case-insensitive for strings)
+        ``!=``  not-equal
+        ``~=``  substring / contains (strings only)
+        ``>``   greater-than (numeric; timestamp)
+        ``>=``  >=
+        ``<``   less-than
+        ``<=``  <=
+
+    Examples::
+
+        "service == readProperty"
+        "src == 192.168.1.10 AND service ~= Property"
+        "invoke_id > 10 AND invoke_id < 20"
+        "NOT (apdu == Error)"
+        "bvlc == Original-Unicast-NPDU OR bvlc == Forwarded-NPDU"
+    """
+
+    # Tokenise
+    tokens = _tokenise(expr)
+    pos = [0]
+
+    def peek() -> str:
+        return tokens[pos[0]] if pos[0] < len(tokens) else ""
+
+    def consume() -> str:
+        tok = peek()
+        pos[0] += 1
+        return tok
+
+    def parse_expr():  # type: ignore[return]
+        left = parse_term()
+        while peek().upper() in {"AND", "OR"}:
+            op = consume().upper()
+            right = parse_term()
+            left = _AndPredicate(left, right) if op == "AND" else _OrPredicate(left, right)
+        return left
+
+    def parse_term():  # type: ignore[return]
+        tok = peek()
+        if tok.upper() == "NOT":
+            consume()
+            return _NotPredicate(parse_term())
+        if tok == "(":
+            consume()
+            inner = parse_expr()
+            if peek() != ")":
+                raise SyntaxError(f"Expected ')' near {peek()!r}")
+            consume()
+            return inner
+        return parse_comparison()
+
+    def parse_comparison():  # type: ignore[return]
+        field_tok = consume()
+        field_name = _FIELD_ALIASES.get(field_tok.lower())
+        if field_name is None:
+            raise SyntaxError(
+                f"Unknown field {field_tok!r}. Valid fields: {', '.join(sorted(_FIELD_ALIASES))}"
+            )
+        op = consume()
+        if op not in {"==", "!=", "~=", ">", ">=", "<", "<="}:
+            raise SyntaxError(f"Unknown operator {op!r}")
+        value_tok = consume()
+        # Strip surrounding quotes if present
+        if (value_tok.startswith('"') and value_tok.endswith('"')) or (
+            value_tok.startswith("'") and value_tok.endswith("'")
+        ):
+            value_tok = value_tok[1:-1]
+        # Try numeric coercion
+        value: int | float | str
+        try:
+            value = int(value_tok)
+        except ValueError:
+            try:
+                value = float(value_tok)
+            except ValueError:
+                value = value_tok
+
+        return _ComparisonPredicate(field_name, op, value)
+
+    result = parse_expr()
+    if pos[0] < len(tokens):
+        raise SyntaxError(f"Unexpected token {tokens[pos[0]]!r} at position {pos[0]}")
+    return result
+
+
+def _tokenise(expr: str) -> list[str]:
+    """Split a filter expression into tokens, preserving quoted strings."""
+    import re
+
+    token_re = re.compile(
+        r"""
+        "(?:[^"\\]|\\.)*"       # double-quoted string
+        |'(?:[^'\\]|\\.)*'      # single-quoted string
+        |>=|<=|==|!=|~=|[><()]  # multi-char ops and parens
+        |[^\s"'<>=!()~]+        # bare word / number / IP / identifier
+        """,
+        re.VERBOSE,
+    )
+    return token_re.findall(expr)
+
+
+class _ComparisonPredicate:
+    __slots__ = ("field", "op", "value")
+
+    def __init__(self, field: str, op: str, value: int | float | str) -> None:
+        self.field = field
+        self.op = op
+        self.value = value
+
+    def __call__(self, frame: BACnetFrame) -> bool:
+        fv = getattr(frame, self.field)
+        v = self.value
+        op = self.op
+        if op == "==":
+            if isinstance(fv, str) and isinstance(v, str):
+                return fv.lower() == v.lower()
+            return fv == v
+        if op == "!=":
+            if isinstance(fv, str) and isinstance(v, str):
+                return fv.lower() != v.lower()
+            return fv != v
+        if op == "~=":
+            return isinstance(fv, str) and isinstance(v, str) and v.lower() in fv.lower()
+        if op == ">":
+            return fv > v  # type: ignore[operator]
+        if op == ">=":
+            return fv >= v  # type: ignore[operator]
+        if op == "<":
+            return fv < v  # type: ignore[operator]
+        if op == "<=":
+            return fv <= v  # type: ignore[operator]
+        return False
+
+
+class _AndPredicate:
+    __slots__ = ("left", "right")
+
+    def __init__(self, left: Any, right: Any) -> None:
+        self.left = left
+        self.right = right
+
+    def __call__(self, frame: BACnetFrame) -> bool:
+        return self.left(frame) and self.right(frame)
+
+
+class _OrPredicate:
+    __slots__ = ("left", "right")
+
+    def __init__(self, left: Any, right: Any) -> None:
+        self.left = left
+        self.right = right
+
+    def __call__(self, frame: BACnetFrame) -> bool:
+        return self.left(frame) or self.right(frame)
+
+
+class _NotPredicate:
+    __slots__ = ("inner",)
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def __call__(self, frame: BACnetFrame) -> bool:
+        return not self.inner(frame)
+
+
+class FrameQuery:
+    """Compiled filter expression for searching BACnet capture frames.
+
+    Build from a filter expression string (see :func:`_compile_predicate` for
+    the grammar), then call :meth:`match` or use the reader's :meth:`search`
+    method.
+
+    Parameters
+    ----------
+    expr:
+        Filter expression string, e.g.::
+
+            "service == readProperty AND src == 192.168.1.10"
+
+    Raises
+    ------
+    SyntaxError
+        If the expression cannot be parsed.
+
+    Examples::
+
+        from protoskipper.builtin_drivers.bacnet.pcap import PcapReader, FrameQuery
+
+        q = FrameQuery("service ~= Property AND invoke_id > 5")
+        with PcapReader("capture.pcapng") as r:
+            for frame in r.search(q):
+                print(frame)
+    """
+
+    def __init__(self, expr: str) -> None:
+        self._expr = expr
+        self._predicate = _compile_predicate(expr)
+
+    def match(self, frame: BACnetFrame) -> bool:
+        """Return ``True`` if *frame* satisfies the query."""
+        return bool(self._predicate(frame))
+
+    def __repr__(self) -> str:
+        return f"FrameQuery({self._expr!r})"

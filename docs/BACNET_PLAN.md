@@ -1313,7 +1313,15 @@ mirror P7.B.7.
 
 #### P7.G.1 BVLC / NPDU / APDU dissection ✅ scaffold
 
-#### P7.G.2 Frame search and filter language ⬜
+#### P7.G.2 Frame search and filter language ✅
+
+> **Complete.** `FrameQuery` DSL in `pcap.py` — compiles a filter expression
+> string into a predicate. Grammar supports `==`, `!=`, `~=` (substring),
+> `>`, `>=`, `<`, `<=` operators; `AND`, `OR`, `NOT` combinators; parenthesised
+> sub-expressions. Fields: `src`, `dst`, `service`/`svc`, `bvlc`/`bvlc_func`,
+> `apdu`/`apdu_type`, `invoke`/`invoke_id`, `hop`/`hop_count`, `t`/`ts`/`timestamp`.
+> `PcapReader.search(query)` accepts either a `FrameQuery` or a raw expression
+> string. `FrameQuery` added to `__all__`.
 
 #### P7.G.3 BACnet/SC dissection (when SSLKEYLOGFILE present) ⬜
 
@@ -1321,7 +1329,16 @@ mirror P7.B.7.
 
 ### P7.H — Bench overview, conformance, fuzzer, scripting
 
-#### P7.H.1 Bench layout file format (§5.12) ⬜
+#### P7.H.1 Bench layout file format (§5.12) ✅
+
+> **Complete.** `bench.py` — `BenchLayout`, `BenchDevice`, `TilePosition`
+> dataclasses. YAML/JSON load (`BenchLayout.load(path)`) and save
+> (`BenchLayout.save(path, fmt=)`). `TilePosition` stores `col`, `row`,
+> `color`, `width`, `height`. `BenchDevice` enforces ≤ 3 pinned points.
+> `add_device()` auto-assigns next grid column. `schema_version` field
+> guards against reading future files. `load_bench()` / `save_bench()`
+> module-level convenience functions. YAML via PyYAML (optional); falls
+> back to JSON-safe parser.
 
 #### P7.H.2 Conformance test runner (§5.13) ✅
 
