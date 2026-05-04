@@ -807,8 +807,13 @@ class MmsClient:
 
     @property
     def is_connected(self) -> bool:
-        """``True`` if :meth:`connect` has been called and :meth:`close` has not."""
-        return self._con is not None
+        """``True`` if the MMS connection is active at the C layer."""
+        if self._con is None:
+            return False
+        try:
+            return self._lib.IedConnection_getState(self._con) == self._lib.IED_STATE_CONNECTED
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Read services (P8.B.4)
@@ -841,9 +846,22 @@ class MmsClient:
         Raises
         ------
         MmsDirectoryError
-            If the IED returns a non-OK error code.
+            If the IED returns a non-OK error code, or if the connection is
+            not in the CONNECTED state.
         """
         lib = self._lib
+        # Guard: check the C-level connection state *before* entering
+        # libiec61850.  If the IED dropped the session (state CLOSED/CLOSING),
+        # calling IedConnection_readObject on a non-CONNECTED handle can
+        # trigger undefined behaviour inside libiec61850's MMS layer.
+        if self._con is None:
+            raise MmsDirectoryError("Not connected", error_code=lib.IED_ERROR_NOT_CONNECTED)
+        state = lib.IedConnection_getState(self._con)
+        if state != lib.IED_STATE_CONNECTED:
+            raise MmsDirectoryError(
+                f"Connection is not active (state={state})",
+                error_code=lib.IED_ERROR_NOT_CONNECTED,
+            )
         mms_val, error = lib.IedConnection_readObject(self._con, object_ref, fc)
         if error != lib.IED_ERROR_OK:
             if mms_val is not None:

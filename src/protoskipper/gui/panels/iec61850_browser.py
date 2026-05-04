@@ -381,14 +381,16 @@ class Iec61850BrowserPanel(QWidget):
     def _on_read_selected(self) -> None:
         if self._session_id is None:
             return
-        for ref in self._selected_refs():
-            self._sm.read(self._session_id, ref)
+        refs = self._selected_refs()
+        if refs:
+            self._sm.read_many(self._session_id, refs)
 
     def _on_read_all(self) -> None:
         if self._session_id is None:
             return
-        for ref in self._visible_refs():
-            self._sm.read(self._session_id, ref)
+        refs = self._visible_refs()
+        if refs:
+            self._sm.read_many(self._session_id, refs)
 
     def _on_write_clicked(self) -> None:
         refs = self._selected_refs()

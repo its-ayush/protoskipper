@@ -473,6 +473,30 @@ class Iec61850MmsSession(DriverSession):
             error=last_error,
         )
 
+    def read_many(self, refs: list[ObjectRef]) -> list[ReadResult]:
+        """Read a list of object references one at a time.
+
+        Overrides the base fall-through so we can abort the loop early when
+        the MMS connection drops rather than firing hundreds of calls into
+        libiec61850 against a closed socket (which can cause a SIGSEGV in the
+        C layer).
+        """
+        results: list[ReadResult] = []
+        for ref in refs:
+            if self._client is None or not self._client.is_connected:
+                results.append(
+                    ReadResult(
+                        object_ref=ref,
+                        value=None,
+                        quality=Quality.BAD,
+                        timestamp=datetime.now(tz=timezone.utc),
+                        error="Connection lost; aborting bulk read",
+                    )
+                )
+                continue
+            results.append(self.read(ref))
+        return results
+
     def prepare_write(self, ref: ObjectRef, value: Any) -> WriteIntent:
         """Encode a control write intent (no I/O).
 
