@@ -44,7 +44,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from protoskipper.core.errors import ConnectionFailure, DriverError
+from protoskipper.core.errors import ConnectionFailure, DriverError, EncodingError
 
 _log = logging.getLogger(__name__)
 
@@ -81,6 +81,51 @@ FC_BL: int = 10  # Blocking
 FC_EX: int = 11  # Extended
 FC_CO: int = 12  # Control output
 FC_NONE: int = -1  # No specific FC
+
+# ---------------------------------------------------------------------------
+# Control model constants (IEC 61850-7-2 §17.5 / libiec61850 ControlModel)
+# ---------------------------------------------------------------------------
+CONTROL_MODEL_STATUS_ONLY: int = 0
+CONTROL_MODEL_DIRECT_NORMAL: int = 1  # Direct with normal security
+CONTROL_MODEL_SBO_NORMAL: int = 2  # Select-before-operate with normal security
+CONTROL_MODEL_DIRECT_ENHANCED: int = 3  # Direct with enhanced security
+CONTROL_MODEL_SBO_ENHANCED: int = 4  # Select-before-operate with enhanced security
+
+# ---------------------------------------------------------------------------
+# AddCause code names (IEC 61850-7-2 §17.5.3 / libiec61850 AddCause enum)
+# ---------------------------------------------------------------------------
+_ADD_CAUSE_NAMES: dict[int, str] = {
+    0: "UNKNOWN",
+    1: "NOT_SUPPORTED",
+    2: "BLOCKED_BY_SWITCHING_HIERARCHY",
+    3: "SELECT_FAILED",
+    4: "INVALID_ADDRESS",
+    5: "SYNCHROCHECK_FAILED",
+    6: "TIME_LIMIT_OVER",
+    7: "NO_RESOURCES",
+    8: "PARAMETER_CHANGE_IN_EXECUTION",
+    9: "STEP_LIMIT",
+    10: "BLOCKED_BY_MODE",
+    11: "BLOCKED_BY_PROCESS",
+    12: "BLOCKED_BY_INTERLOCKING",
+    13: "BLOCKED_BY_SYNCHROCHECK",
+    14: "COMMAND_ALREADY_IN_EXECUTION",
+    15: "BLOCKED_BY_HEALTH",
+    16: "ONE_OF_N_CONTROL",
+    17: "ABORTION_BY_CANCEL",
+    20: "OBJECT_NOT_SELECTED",
+    21: "OBJECT_ALREADY_SELECTED",
+    28: "NO_ACCESS_AUTHORITY",
+    29: "ENDED_WITH_OVERSHOOT",
+    30: "ABORTION_BY_TRIP",
+    31: "OBJECT_CONNECTED",
+    34: "OBJECT_NONE_EXISTING",
+}
+
+
+def _add_cause_name(code: int) -> str:
+    return _ADD_CAUSE_NAMES.get(code, f"ADD_CAUSE_{code}")
+
 
 # ---------------------------------------------------------------------------
 # Quality bit positions (for MmsValue_getBitStringBit)
@@ -175,6 +220,33 @@ class MmsDecodedValue:
     timestamp_ms: int = 0
 
 
+@dataclass
+class ControlResult:
+    """Result of :meth:`MmsClient.write_control`.
+
+    Attributes
+    ----------
+    success:
+        True if the operate phase completed without error.
+    control_model:
+        Integer control model as reported by the IED (``CONTROL_MODEL_*``
+        constants).
+    add_cause:
+        IEC 61850 AddCause integer from the last ApplError.  0 when not
+        applicable or when the operate succeeded cleanly.
+    add_cause_name:
+        Human-readable name for *add_cause*.
+    error_str:
+        Empty string on success; diagnostic message on failure.
+    """
+
+    success: bool
+    control_model: int = 0
+    add_cause: int = 0
+    add_cause_name: str = "UNKNOWN"
+    error_str: str = ""
+
+
 def _mms_value_to_python(lib: Any, val: Any) -> Any:
     """Recursively convert a pyiec61850 ``MmsValue`` to a Python object.
 
@@ -225,6 +297,39 @@ def _decode_q_bits(lib: Any, q_val: Any) -> tuple[int, bool, bool]:
     except Exception:
         _log.debug("Failed to decode quality MmsValue", exc_info=True)
         return 0, False, False
+
+
+def _python_to_mms_ctlval(lib: Any, value: Any) -> Any:
+    """Encode a Python value as an MmsValue suitable for a control ctlVal.
+
+    Parameters
+    ----------
+    lib:
+        The ``pyiec61850`` module (already verified present by the caller).
+    value:
+        Python value to encode.  Must be ``bool``, ``int``, or ``float``.
+
+    Returns
+    -------
+    Any
+        A newly-allocated ``MmsValue``; the caller must call
+        ``lib.MmsValue_delete`` when done.
+
+    Raises
+    ------
+    EncodingError
+        If *value* is not a ``bool``, ``int``, or ``float``.
+    """
+    if isinstance(value, bool):
+        return lib.MmsValue_newBoolean(value)
+    if isinstance(value, int):
+        return lib.MmsValue_newIntegerFromInt32(value)
+    if isinstance(value, float):
+        return lib.MmsValue_newFloat(value)
+    raise EncodingError(
+        f"Cannot encode {type(value).__name__!r} as MMS ctlVal; "
+        "only bool, int, and float are supported."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -605,6 +710,124 @@ class MmsClient:
             is_test=is_test,
             timestamp_ms=ts_ms,
         )
+
+    # ------------------------------------------------------------------
+    # Write / control services (P8.B.5)
+    # ------------------------------------------------------------------
+    #
+    # libiec61850 control service API (from ied_client_api.h):
+    #   ControlObjectClient_create(ref, con)           -> ControlObjectClient
+    #   ControlObjectClient_getControlModel(ctrl)      -> int (0-4)
+    #   ControlObjectClient_select(ctrl)               -> bool
+    #   ControlObjectClient_selectWithValue(ctrl, val) -> bool
+    #   ControlObjectClient_operate(ctrl, val, opTm)   -> bool
+    #   ControlObjectClient_getLastApplError(ctrl)     -> LastApplError{.error, .addCause}
+    #   ControlObjectClient_destroy(ctrl)
+
+    def write_control(
+        self,
+        do_ref: str,
+        value: Any,
+        oper_time_ms: int = 0,
+    ) -> ControlResult:
+        """Issue a control operation to a controllable data object.
+
+        Automatically selects the control sequence based on the control model
+        reported by the IED:
+
+        * :data:`CONTROL_MODEL_DIRECT_NORMAL` /
+          :data:`CONTROL_MODEL_DIRECT_ENHANCED` — operate immediately.
+        * :data:`CONTROL_MODEL_SBO_NORMAL` — Select then Operate.
+        * :data:`CONTROL_MODEL_SBO_ENHANCED` — SelectWithValue then Operate.
+
+        Parameters
+        ----------
+        do_ref:
+            Data object reference of the controllable object, e.g.
+            ``"LD0/XCBR1.Pos"``.  Must not include a ``[FC]`` suffix.
+        value:
+            Control value (ctlVal).  Must be ``bool``, ``int``, or ``float``.
+        oper_time_ms:
+            UTC time in milliseconds for time-activated operate.  0 means
+            "operate now".
+
+        Returns
+        -------
+        ControlResult
+            Never raises (other than :class:`~protoskipper.core.errors.EncodingError`
+            for unsupported *value* types); errors are captured in
+            :attr:`ControlResult.error_str`.
+        """
+        lib = self._lib
+        ctrl = lib.ControlObjectClient_create(do_ref, self._con)
+        if ctrl is None:
+            return ControlResult(
+                success=False,
+                error_str=f"ControlObjectClient_create returned None for {do_ref!r}",
+            )
+        try:
+            model = int(lib.ControlObjectClient_getControlModel(ctrl))
+            mms_val = _python_to_mms_ctlval(lib, value)  # raises EncodingError if invalid
+            try:
+                # SBO select phase
+                if model == CONTROL_MODEL_SBO_NORMAL:
+                    if not bool(lib.ControlObjectClient_select(ctrl)):
+                        last_err = lib.ControlObjectClient_getLastApplError(ctrl)
+                        ac = int(getattr(last_err, "addCause", 0))
+                        return ControlResult(
+                            success=False,
+                            control_model=model,
+                            add_cause=ac,
+                            add_cause_name=_add_cause_name(ac),
+                            error_str=f"Select failed: addCause={_add_cause_name(ac)}",
+                        )
+                elif model == CONTROL_MODEL_SBO_ENHANCED and not bool(
+                    lib.ControlObjectClient_selectWithValue(ctrl, mms_val)
+                ):
+                    last_err = lib.ControlObjectClient_getLastApplError(ctrl)
+                    ac = int(getattr(last_err, "addCause", 0))
+                    return ControlResult(
+                        success=False,
+                        control_model=model,
+                        add_cause=ac,
+                        add_cause_name=_add_cause_name(ac),
+                        error_str=f"SelectWithValue failed: addCause={_add_cause_name(ac)}",
+                    )
+
+                # Operate phase (all models)
+                operated = bool(lib.ControlObjectClient_operate(ctrl, mms_val, oper_time_ms))
+                last_err = lib.ControlObjectClient_getLastApplError(ctrl)
+                ac = int(getattr(last_err, "addCause", 0))
+                if operated:
+                    return ControlResult(
+                        success=True,
+                        control_model=model,
+                        add_cause=ac,
+                        add_cause_name=_add_cause_name(ac),
+                    )
+                return ControlResult(
+                    success=False,
+                    control_model=model,
+                    add_cause=ac,
+                    add_cause_name=_add_cause_name(ac),
+                    error_str=f"Operate failed: addCause={_add_cause_name(ac)}",
+                )
+            except EncodingError:
+                raise
+            except Exception as exc:
+                _log.debug(
+                    "write_control(%r) error during select/operate: %s",
+                    do_ref,
+                    exc,
+                    exc_info=True,
+                )
+                return ControlResult(success=False, error_str=str(exc))
+            finally:
+                lib.MmsValue_delete(mms_val)
+        except EncodingError:
+            raise
+        finally:
+            lib.ControlObjectClient_destroy(ctrl)
 
     # ------------------------------------------------------------------
     # Directory services (P8.B.3)

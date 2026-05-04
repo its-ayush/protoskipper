@@ -1,5 +1,5 @@
 # Copyright (C) 2026 DataSailors Pvt Ltd.  Licensed under GPL-3.0-or-later.
-"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 / P8.B.4 contract.
+"""Unit tests for the IEC 61850 plugin - P8.A.1 / P8.B.2 / P8.B.3 / P8.B.4 / P8.B.5 contract.
 
 Tests verify that:
 * The plugin package imports cleanly.
@@ -24,7 +24,13 @@ Tests verify that:
   - DA-level refs with ``[FC]`` suffix: single call, quality=UNKNOWN.
   - Maps quality bits to Quality enum (GOOD/BAD/UNCERTAIN/SIMULATED).
   - Returns BAD ReadResult (no raise) on all-FC-fail or no client.
-* Session stubs for P8.B.5 still raise ``NotImplementedError``.
+* ``prepare_write`` / ``commit_write`` (P8.B.5):
+  - ``prepare_write`` encodes bool/int/float; raises EncodingError for other types.
+  - ``commit_write`` calls ``require_write_authorization``; denied -> no transmission.
+  - Supports all four control models (direct-normal, direct-enhanced, SBO-normal,
+    SBO-enhanced) by delegating to ``MmsClient.write_control``.
+  - ``record_write_outcome`` is called exactly once for every attempted transmission.
+  - Returns failure WriteResult (no raise) on operate failure, with AddCause in metadata.
 """
 
 from __future__ import annotations
@@ -285,33 +291,34 @@ class TestSessionStubs:
         assert result.error is not None
         assert result.value is None
 
-    def test_prepare_write_raises(self, session) -> None:  # type: ignore[no-untyped-def]
-        from protoskipper.core.driver import ObjectRef
-
-        ref = ObjectRef(
-            device=session.device,
-            object_id="LD0/XCBR1.CO.Pos.Oper.ctlVal",
-            data_type="boolean",
-        )
-        with pytest.raises(NotImplementedError, match=r"P8\.B\.5"):
-            session.prepare_write(ref, True)
-
-    def test_commit_write_raises(self, session) -> None:  # type: ignore[no-untyped-def]
+    def test_prepare_write_bool_intent(self, session) -> None:  # type: ignore[no-untyped-def]
         from protoskipper.core.driver import ObjectRef, WriteIntent
 
         ref = ObjectRef(
             device=session.device,
-            object_id="LD0/XCBR1.CO.Pos.Oper.ctlVal",
-            data_type="boolean",
+            object_id="LD0/XCBR1.Pos",
+            data_type="do",
         )
-        intent = WriteIntent(
-            object_ref=ref,
-            requested_value=True,
-            encoded_bytes=b"\x01",
-            description="test",
-        )
-        with pytest.raises(NotImplementedError, match=r"P8\.B\.5"):
-            session.commit_write(intent)
+        intent = session.prepare_write(ref, True)
+        assert isinstance(intent, WriteIntent)
+        assert intent.requested_value is True
+        assert isinstance(intent.encoded_bytes, bytes) and len(intent.encoded_bytes) > 0
+
+    def test_commit_write_denied_returns_failure(self, session) -> None:  # type: ignore[no-untyped-def]
+        """commit_write denied by safety -> failure WriteResult, no record_write_outcome."""
+        from unittest.mock import MagicMock
+
+        from protoskipper.core.driver import ObjectRef, SafetyContext
+
+        mock_safety = MagicMock(spec=SafetyContext)
+        mock_safety.require_write_authorization.return_value = False
+        session.safety = mock_safety
+
+        ref = ObjectRef(device=session.device, object_id="LD0/XCBR1.Pos", data_type="do")
+        intent = session.prepare_write(ref, True)
+        result = session.commit_write(intent)
+        assert result.success is False
+        mock_safety.record_write_outcome.assert_not_called()
 
     def test_close_is_noop_without_client(self, session) -> None:  # type: ignore[no-untyped-def]
         session.close()  # must not raise
@@ -654,3 +661,182 @@ class TestRead:
         result = session.read(ref)
         assert result.quality == Quality.BAD
         assert result.error is not None
+
+
+# ---------------------------------------------------------------------------
+# P8.B.5 — prepare_write / commit_write
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareWrite:
+    """prepare_write encodes the ctlVal with no I/O."""
+
+    @pytest.fixture
+    def session(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        return Iec61850MmsSession(device=device, safety=safety, client=MagicMock())
+
+    @pytest.fixture
+    def ctrl_ref(self, session):  # type: ignore[no-untyped-def]
+        from protoskipper.core.driver import ObjectRef
+
+        return ObjectRef(device=session.device, object_id="LD0/XCBR1.Pos", data_type="do")
+
+    def test_bool_value_returns_intent(self, session, ctrl_ref) -> None:
+        from protoskipper.core.driver import WriteIntent
+
+        intent = session.prepare_write(ctrl_ref, True)
+        assert isinstance(intent, WriteIntent)
+        assert intent.object_ref is ctrl_ref
+        assert intent.requested_value is True
+        assert isinstance(intent.encoded_bytes, bytes) and len(intent.encoded_bytes) > 0
+        assert isinstance(intent.description, str)
+
+    def test_int_value_returns_intent(self, session, ctrl_ref) -> None:
+        intent = session.prepare_write(ctrl_ref, 1)
+        assert intent.requested_value == 1
+
+    def test_float_value_returns_intent(self, session, ctrl_ref) -> None:
+        intent = session.prepare_write(ctrl_ref, 1.5)
+        assert intent.requested_value == 1.5
+
+    def test_unsupported_type_raises_encoding_error(self, session, ctrl_ref) -> None:
+        from protoskipper.core.errors import EncodingError
+
+        with pytest.raises(EncodingError):
+            session.prepare_write(ctrl_ref, "open")
+
+
+class TestCommitWrite:
+    """commit_write drives the four control models via MmsClient.write_control."""
+
+    @pytest.fixture
+    def session(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        safety.require_write_authorization.return_value = True
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    @pytest.fixture
+    def intent(self, session):  # type: ignore[no-untyped-def]
+        from protoskipper.core.driver import ObjectRef
+
+        ref = ObjectRef(device=session.device, object_id="LD0/XCBR1.Pos", data_type="do")
+        return session.prepare_write(ref, True)
+
+    def _ctrl_ok(self, model: int) -> object:
+        from protoskipper_iec61850._mms_client import ControlResult
+
+        return ControlResult(success=True, control_model=model)
+
+    def _ctrl_fail(self, model: int, add_cause: int, add_cause_name: str) -> object:
+        from protoskipper_iec61850._mms_client import ControlResult
+
+        return ControlResult(
+            success=False,
+            control_model=model,
+            add_cause=add_cause,
+            add_cause_name=add_cause_name,
+            error_str=f"failed: addCause={add_cause_name}",
+        )
+
+    def test_denied_by_safety_returns_failure_no_record(self, session, intent) -> None:
+        session.safety.require_write_authorization.return_value = False
+        result = session.commit_write(intent)
+        assert result.success is False
+        session.safety.record_write_outcome.assert_not_called()
+        session._client.write_control.assert_not_called()
+
+    def test_direct_normal_success(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_DIRECT_NORMAL
+
+        session._client.write_control.return_value = self._ctrl_ok(CONTROL_MODEL_DIRECT_NORMAL)
+        result = session.commit_write(intent)
+        assert result.success is True
+        assert result.metadata["control_model"] == CONTROL_MODEL_DIRECT_NORMAL
+        session.safety.record_write_outcome.assert_called_once()
+
+    def test_direct_enhanced_success(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_DIRECT_ENHANCED
+
+        session._client.write_control.return_value = self._ctrl_ok(CONTROL_MODEL_DIRECT_ENHANCED)
+        result = session.commit_write(intent)
+        assert result.success is True
+        assert result.metadata["control_model"] == CONTROL_MODEL_DIRECT_ENHANCED
+
+    def test_sbo_normal_success(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_SBO_NORMAL
+
+        session._client.write_control.return_value = self._ctrl_ok(CONTROL_MODEL_SBO_NORMAL)
+        result = session.commit_write(intent)
+        assert result.success is True
+        assert result.metadata["control_model"] == CONTROL_MODEL_SBO_NORMAL
+
+    def test_sbo_enhanced_success(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_SBO_ENHANCED
+
+        session._client.write_control.return_value = self._ctrl_ok(CONTROL_MODEL_SBO_ENHANCED)
+        result = session.commit_write(intent)
+        assert result.success is True
+        assert result.metadata["control_model"] == CONTROL_MODEL_SBO_ENHANCED
+
+    def test_select_fail_returns_failure_with_add_cause(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_SBO_NORMAL
+
+        session._client.write_control.return_value = self._ctrl_fail(
+            CONTROL_MODEL_SBO_NORMAL, 3, "SELECT_FAILED"
+        )
+        result = session.commit_write(intent)
+        assert result.success is False
+        assert result.metadata["add_cause"] == 3
+        assert result.metadata["add_cause_name"] == "SELECT_FAILED"
+        session.safety.record_write_outcome.assert_called_once()
+
+    def test_operate_fail_with_add_cause_in_metadata(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import CONTROL_MODEL_DIRECT_NORMAL
+
+        session._client.write_control.return_value = self._ctrl_fail(
+            CONTROL_MODEL_DIRECT_NORMAL, 10, "BLOCKED_BY_MODE"
+        )
+        result = session.commit_write(intent)
+        assert result.success is False
+        assert result.error is not None
+        assert result.metadata["add_cause_name"] == "BLOCKED_BY_MODE"
+        session.safety.record_write_outcome.assert_called_once()
+
+    def test_write_control_receives_do_ref_and_value(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import ControlResult
+
+        session._client.write_control.return_value = ControlResult(success=True, control_model=1)
+        session.commit_write(intent)
+        session._client.write_control.assert_called_once_with("LD0/XCBR1.Pos", True)
+
+    def test_no_client_after_authorization_returns_failure(self, session, intent) -> None:
+        session._client = None
+        result = session.commit_write(intent)
+        assert result.success is False
+        session.safety.record_write_outcome.assert_called_once()
+
+    def test_record_write_outcome_called_on_failure(self, session, intent) -> None:
+        from protoskipper_iec61850._mms_client import ControlResult
+
+        session._client.write_control.return_value = ControlResult(
+            success=False, error_str="Operate failed"
+        )
+        result = session.commit_write(intent)
+        assert result.success is False
+        session.safety.record_write_outcome.assert_called_once()

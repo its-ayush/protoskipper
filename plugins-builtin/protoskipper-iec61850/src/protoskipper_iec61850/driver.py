@@ -366,26 +366,94 @@ class Iec61850MmsSession(DriverSession):
         )
 
     def prepare_write(self, ref: ObjectRef, value: Any) -> WriteIntent:
-        """Encode a write intent (no I/O).
+        """Encode a control write intent (no I/O).
 
-        .. note::
-            Not yet implemented (P8.B.5).
+        Parameters
+        ----------
+        ref:
+            Reference to a controllable data object, e.g.
+            ``LD0/XCBR1.Pos``.
+        value:
+            Control value (ctlVal).  Must be ``bool``, ``int``, or ``float``.
+
+        Raises
+        ------
+        EncodingError
+            If *value* is not a supported ctlVal type.
         """
-        raise NotImplementedError(
-            "IEC 61850 prepare_write is not yet implemented.  "
-            "See P8.B.5 in docs/internal/EXECUTION_PLAN.md."
+        if not isinstance(value, (bool, int, float)):
+            raise EncodingError(
+                f"IEC 61850 ctlVal must be bool, int, or float; got {type(value).__name__!r}"
+            )
+        encoded = repr(value).encode()
+        return WriteIntent(
+            object_ref=ref,
+            requested_value=value,
+            encoded_bytes=encoded,
+            description=f"Control {ref.object_id} ctlVal={value!r}",
         )
 
     def commit_write(self, intent: WriteIntent) -> WriteResult:
-        """Transmit a prepared write.
+        """Transmit a previously-prepared control write.
 
-        .. note::
-            Not yet implemented (P8.B.5).
+        Calls :meth:`~protoskipper.core.driver.SafetyContext.require_write_authorization`
+        before transmission.  Denied writes return a failure
+        :class:`~protoskipper.core.driver.WriteResult` without calling
+        :meth:`~protoskipper.core.driver.SafetyContext.record_write_outcome`.
+
+        Always calls
+        :meth:`~protoskipper.core.driver.SafetyContext.record_write_outcome`
+        when a transmission was attempted (regardless of success/failure).
+
+        Never raises.
         """
-        raise NotImplementedError(
-            "IEC 61850 commit_write is not yet implemented.  "
-            "See P8.B.5 in docs/internal/EXECUTION_PLAN.md."
+        now = datetime.now(tz=timezone.utc)
+
+        if not self.safety.require_write_authorization(intent):
+            return WriteResult(
+                intent=intent,
+                success=False,
+                timestamp=now,
+                error="Write denied by operator",
+            )
+
+        if self._client is None:
+            result = WriteResult(
+                intent=intent,
+                success=False,
+                timestamp=now,
+                error="Session has no active MMS client",
+            )
+            self.safety.record_write_outcome(result)
+            return result
+
+        do_ref, _ = _parse_object_id_fc(intent.object_ref.object_id)
+        try:
+            ctrl_result = self._client.write_control(do_ref, intent.requested_value)
+        except EncodingError as exc:
+            result = WriteResult(
+                intent=intent,
+                success=False,
+                timestamp=datetime.now(tz=timezone.utc),
+                error=str(exc),
+            )
+            self.safety.record_write_outcome(result)
+            return result
+
+        metadata: dict[str, Any] = {
+            "control_model": ctrl_result.control_model,
+            "add_cause": ctrl_result.add_cause,
+            "add_cause_name": ctrl_result.add_cause_name,
+        }
+        result = WriteResult(
+            intent=intent,
+            success=ctrl_result.success,
+            timestamp=datetime.now(tz=timezone.utc),
+            error=ctrl_result.error_str if not ctrl_result.success else None,
+            metadata=metadata,
         )
+        self.safety.record_write_outcome(result)
+        return result
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""
