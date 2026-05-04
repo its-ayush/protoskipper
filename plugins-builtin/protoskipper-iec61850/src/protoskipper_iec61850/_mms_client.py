@@ -402,6 +402,28 @@ class FileInfo:
     last_modified_ms: int
 
 
+@dataclass
+class SgcbValues:
+    """Snapshot of a Setting Group Control Block (SGCB) at read time.
+
+    IEC 61850-7-2 §8.7 defines the SGCB attributes.  Only the two most
+    useful attributes are surfaced here; all reads use the **SG** functional
+    constraint (FC=6).
+
+    Attributes
+    ----------
+    num_of_sgs:
+        Total number of setting groups configured on the IED (1-based count,
+        always ≥ 1).
+    act_sg:
+        Index of the currently active setting group (1-based, 1 ≤ act_sg ≤
+        num_of_sgs).
+    """
+
+    num_of_sgs: int
+    act_sg: int
+
+
 def _mms_value_to_python(lib: Any, val: Any) -> Any:
     """Recursively convert a pyiec61850 ``MmsValue`` to a Python object.
 
@@ -1386,6 +1408,160 @@ class MmsClient:
                 error_code=error,
             )
         return self._decode_journal_entries(lib, entries_ll, log_ref), bool(more_follows)
+
+    # ---------------------------------------------------------------------------
+    # Setting-group services (P8.B.9)
+    # ---------------------------------------------------------------------------
+    #
+    # pyiec61850 does not expose the high-level SGCB ACSI functions
+    # (IedConnection_getSGCBValues / selectSettingGroup / etc.) in its SWIG
+    # bindings.  We implement SGCB access via the generic
+    # ``IedConnection_readObject`` / ``IedConnection_writeObject`` MMS calls
+    # with the SG (FC=6) and SE (FC=7) functional constraints respectively.
+    #
+    # Standard SGCB attribute paths (IEC 61850-7-2 §8.7.3):
+    #
+    #   {sgcb_ref}.NumOfSGs  FC=SG  -- total number of setting groups
+    #   {sgcb_ref}.ActSG     FC=SG  -- index of currently active SG (1-based)
+    #   {sgcb_ref}.EditSG    FC=SE  -- index of setting group open for editing
+    #   {sgcb_ref}.CnfEdit   FC=SE  -- boolean; write True to confirm edits
+    #
+    # ``IedConnection_writeObject`` is a void C function with an OUTPUT error
+    # parameter; SWIG maps it so that the Python call returns the error code
+    # directly: ``error = lib.IedConnection_writeObject(con, ref, fc, mv)``.
+
+    def get_sgcb_values(self, sgcb_ref: str) -> SgcbValues:
+        """Read ``NumOfSGs`` and ``ActSG`` from a Setting Group Control Block.
+
+        Parameters
+        ----------
+        sgcb_ref:
+            SGCB reference in dot notation, e.g. ``"simpleIO/LLN0.SGCB"``.
+
+        Returns
+        -------
+        SgcbValues
+            Snapshot of the two most-used SGCB attributes.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If either attribute read returns a non-OK error code.
+        """
+        lib = self._lib
+
+        num_mv, error = lib.IedConnection_readObject(self._con, f"{sgcb_ref}.NumOfSGs", FC_SG)
+        if error != lib.IED_ERROR_OK:
+            if num_mv is not None:
+                lib.MmsValue_delete(num_mv)
+            raise MmsDirectoryError(
+                f"GetSGCBValues({sgcb_ref!r}).NumOfSGs failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        try:
+            num_of_sgs = int(lib.MmsValue_toInt32(num_mv))
+        finally:
+            lib.MmsValue_delete(num_mv)
+
+        act_mv, error = lib.IedConnection_readObject(self._con, f"{sgcb_ref}.ActSG", FC_SG)
+        if error != lib.IED_ERROR_OK:
+            if act_mv is not None:
+                lib.MmsValue_delete(act_mv)
+            raise MmsDirectoryError(
+                f"GetSGCBValues({sgcb_ref!r}).ActSG failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+        try:
+            act_sg = int(lib.MmsValue_toInt32(act_mv))
+        finally:
+            lib.MmsValue_delete(act_mv)
+
+        return SgcbValues(num_of_sgs=num_of_sgs, act_sg=act_sg)
+
+    def select_active_sg(self, sgcb_ref: str, sg_num: int) -> None:
+        """Activate a specific setting group (ACSI SelectActiveSG service).
+
+        Writes ``ActSG`` with FC=SG.
+
+        Parameters
+        ----------
+        sgcb_ref:
+            SGCB reference in dot notation, e.g. ``"simpleIO/LLN0.SGCB"``.
+        sg_num:
+            1-based setting group index to activate.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK error code.
+        """
+        lib = self._lib
+        mv = lib.MmsValue_newIntegerFromInt32(sg_num)
+        try:
+            error = lib.IedConnection_writeObject(self._con, f"{sgcb_ref}.ActSG", FC_SG, mv)
+        finally:
+            lib.MmsValue_delete(mv)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"SelectActiveSG({sgcb_ref!r}, {sg_num}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+
+    def select_edit_sg(self, sgcb_ref: str, sg_num: int) -> None:
+        """Open a setting group for editing (ACSI SelectEditSG service).
+
+        Writes ``EditSG`` with FC=SE.
+
+        Parameters
+        ----------
+        sgcb_ref:
+            SGCB reference in dot notation, e.g. ``"simpleIO/LLN0.SGCB"``.
+        sg_num:
+            1-based setting group index to open for editing.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK error code.
+        """
+        lib = self._lib
+        mv = lib.MmsValue_newIntegerFromInt32(sg_num)
+        try:
+            error = lib.IedConnection_writeObject(self._con, f"{sgcb_ref}.EditSG", FC_SE, mv)
+        finally:
+            lib.MmsValue_delete(mv)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"SelectEditSG({sgcb_ref!r}, {sg_num}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
+
+    def confirm_edit_sg(self, sgcb_ref: str) -> None:
+        """Confirm editing of the currently open setting group (ACSI ConfirmEditSGValues).
+
+        Writes ``CnfEdit = True`` with FC=SE.
+
+        Parameters
+        ----------
+        sgcb_ref:
+            SGCB reference in dot notation, e.g. ``"simpleIO/LLN0.SGCB"``.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the IED returns a non-OK error code.
+        """
+        lib = self._lib
+        mv = lib.MmsValue_newBoolean(True)
+        try:
+            error = lib.IedConnection_writeObject(self._con, f"{sgcb_ref}.CnfEdit", FC_SE, mv)
+        finally:
+            lib.MmsValue_delete(mv)
+        if error != lib.IED_ERROR_OK:
+            raise MmsDirectoryError(
+                f"ConfirmEditSG({sgcb_ref!r}) failed: {_ied_error_name(error)}",
+                error_code=error,
+            )
 
     # ---------------------------------------------------------------------------
     # File services (P8.B.8)

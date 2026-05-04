@@ -66,6 +66,7 @@ from protoskipper_iec61850._mms_client import (
     MmsDirectoryError,
     RcbValues,
     ReportEntry,
+    SgcbValues,
 )
 
 _logger = logging.getLogger(__name__)
@@ -631,6 +632,70 @@ class Iec61850MmsSession(DriverSession):
         if self._client is None:
             raise MmsDirectoryError("Session has no active MMS client", error_code=1)
         self._client.delete_file(remote_path)
+
+    # ------------------------------------------------------------------
+    # Setting-group services (P8.B.9)
+    # ------------------------------------------------------------------
+
+    def get_sgcb_values(self, sgcb_ref: str) -> SgcbValues:
+        """Read NumOfSGs and ActSG from a Setting Group Control Block.
+
+        Delegates to :meth:`MmsClient.get_sgcb_values`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        return self._client.get_sgcb_values(sgcb_ref)
+
+    def select_active_sg(self, sgcb_ref: str, sg_num: int) -> None:
+        """Activate a specific setting group.
+
+        Delegates to :meth:`MmsClient.select_active_sg`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        self._client.select_active_sg(sgcb_ref, sg_num)
+
+    def select_edit_sg(self, sgcb_ref: str, sg_num: int) -> None:
+        """Open a setting group for editing.
+
+        Delegates to :meth:`MmsClient.select_edit_sg`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        self._client.select_edit_sg(sgcb_ref, sg_num)
+
+    def confirm_edit_sg(self, sgcb_ref: str) -> None:
+        """Confirm edits to the currently open setting group.
+
+        Delegates to :meth:`MmsClient.confirm_edit_sg`.
+
+        Raises
+        ------
+        MmsDirectoryError
+            If the session has no active client, or if the IED returns an
+            error.
+        """
+        if self._client is None:
+            raise MmsDirectoryError("Session has no active MMS client", error_code=1)
+        self._client.confirm_edit_sg(sgcb_ref)
 
     def close(self) -> None:
         """Send MMS Close and release all transport resources."""

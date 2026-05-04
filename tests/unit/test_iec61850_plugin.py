@@ -1414,3 +1414,281 @@ class TestSessionFileServices:
             session.get_file("x.cfg")
         with pytest.raises(MmsDirectoryError):
             session.delete_file("x.cfg")
+
+
+# ---------------------------------------------------------------------------
+# P8.B.9 — Setting-group services
+# ---------------------------------------------------------------------------
+
+
+class TestMmsClientGetSgcbValues:
+    """MmsClient.get_sgcb_values reads NumOfSGs and ActSG via FC_SG."""
+
+    def _make_client(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_readObject.side_effect = [
+            (MagicMock(name="num_mv"), 0),  # NumOfSGs call → OK
+            (MagicMock(name="act_mv"), 0),  # ActSG call → OK
+        ]
+        lib.MmsValue_toInt32.side_effect = [3, 2]  # NumOfSGs=3, ActSG=2
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        return client, lib
+
+    def test_returns_sgcb_values(self) -> None:
+        from protoskipper_iec61850._mms_client import FC_SG, SgcbValues
+
+        client, lib = self._make_client()
+        result = client.get_sgcb_values("simpleIO/LLN0.SGCB")
+        assert isinstance(result, SgcbValues)
+        assert result.num_of_sgs == 3
+        assert result.act_sg == 2
+        # Both reads used FC_SG
+        calls = lib.IedConnection_readObject.call_args_list
+        assert calls[0].args[2] == FC_SG
+        assert calls[1].args[2] == FC_SG
+
+    def test_num_of_sgs_read_ref(self) -> None:
+        client, lib = self._make_client()
+        client.get_sgcb_values("LD/LLN0.SGCB")
+        first_ref = lib.IedConnection_readObject.call_args_list[0].args[1]
+        assert first_ref == "LD/LLN0.SGCB.NumOfSGs"
+
+    def test_act_sg_read_ref(self) -> None:
+        client, lib = self._make_client()
+        client.get_sgcb_values("LD/LLN0.SGCB")
+        second_ref = lib.IedConnection_readObject.call_args_list[1].args[1]
+        assert second_ref == "LD/LLN0.SGCB.ActSG"
+
+    def test_raises_on_num_of_sgs_error(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient, MmsDirectoryError
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_readObject.return_value = (None, 3)  # error
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        with pytest.raises(MmsDirectoryError):
+            client.get_sgcb_values("LD/LLN0.SGCB")
+
+    def test_raises_on_act_sg_error(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient, MmsDirectoryError
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_readObject.side_effect = [
+            (MagicMock(), 0),  # NumOfSGs OK
+            (None, 5),  # ActSG error
+        ]
+        lib.MmsValue_toInt32.return_value = 2
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        with pytest.raises(MmsDirectoryError):
+            client.get_sgcb_values("LD/LLN0.SGCB")
+
+
+class TestMmsClientSelectActiveSg:
+    """MmsClient.select_active_sg writes ActSG with FC_SG."""
+
+    def _make_client(self, error_code: int = 0):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_writeObject.return_value = error_code
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        return client, lib
+
+    def test_success_does_not_raise(self) -> None:
+        client, _ = self._make_client(0)
+        client.select_active_sg("simpleIO/LLN0.SGCB", 2)
+
+    def test_writes_correct_ref_and_fc(self) -> None:
+        from protoskipper_iec61850._mms_client import FC_SG
+
+        client, lib = self._make_client(0)
+        client.select_active_sg("LD/LLN0.SGCB", 1)
+        args = lib.IedConnection_writeObject.call_args.args
+        assert args[1] == "LD/LLN0.SGCB.ActSG"
+        assert args[2] == FC_SG
+
+    def test_creates_integer_mms_value(self) -> None:
+        client, lib = self._make_client(0)
+        client.select_active_sg("LD/LLN0.SGCB", 3)
+        lib.MmsValue_newIntegerFromInt32.assert_called_once_with(3)
+
+    def test_raises_on_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, _ = self._make_client(21)  # IED_ERROR_ACCESS_DENIED
+        with pytest.raises(MmsDirectoryError):
+            client.select_active_sg("LD/LLN0.SGCB", 2)
+
+    def test_mms_value_deleted_on_success(self) -> None:
+        client, lib = self._make_client(0)
+        mv = lib.MmsValue_newIntegerFromInt32.return_value
+        client.select_active_sg("LD/LLN0.SGCB", 1)
+        lib.MmsValue_delete.assert_called_once_with(mv)
+
+    def test_mms_value_deleted_on_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, lib = self._make_client(5)
+        mv = lib.MmsValue_newIntegerFromInt32.return_value
+        with pytest.raises(MmsDirectoryError):
+            client.select_active_sg("LD/LLN0.SGCB", 1)
+        lib.MmsValue_delete.assert_called_once_with(mv)
+
+
+class TestMmsClientSelectEditSg:
+    """MmsClient.select_edit_sg writes EditSG with FC_SE."""
+
+    def _make_client(self, error_code: int = 0):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_writeObject.return_value = error_code
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        return client, lib
+
+    def test_success_does_not_raise(self) -> None:
+        client, _ = self._make_client(0)
+        client.select_edit_sg("simpleIO/LLN0.SGCB", 2)
+
+    def test_writes_correct_ref_and_fc(self) -> None:
+        from protoskipper_iec61850._mms_client import FC_SE
+
+        client, lib = self._make_client(0)
+        client.select_edit_sg("LD/LLN0.SGCB", 1)
+        args = lib.IedConnection_writeObject.call_args.args
+        assert args[1] == "LD/LLN0.SGCB.EditSG"
+        assert args[2] == FC_SE
+
+    def test_raises_on_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, _ = self._make_client(21)
+        with pytest.raises(MmsDirectoryError):
+            client.select_edit_sg("LD/LLN0.SGCB", 1)
+
+
+class TestMmsClientConfirmEditSg:
+    """MmsClient.confirm_edit_sg writes CnfEdit=True with FC_SE."""
+
+    def _make_client(self, error_code: int = 0):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsClient
+
+        lib = MagicMock()
+        lib.IED_ERROR_OK = 0
+        lib.IedConnection_writeObject.return_value = error_code
+        client = MmsClient.__new__(MmsClient)
+        client._lib = lib
+        client._con = MagicMock()
+        return client, lib
+
+    def test_success_does_not_raise(self) -> None:
+        client, _ = self._make_client(0)
+        client.confirm_edit_sg("simpleIO/LLN0.SGCB")
+
+    def test_writes_correct_ref_and_fc(self) -> None:
+        from protoskipper_iec61850._mms_client import FC_SE
+
+        client, lib = self._make_client(0)
+        client.confirm_edit_sg("LD/LLN0.SGCB")
+        args = lib.IedConnection_writeObject.call_args.args
+        assert args[1] == "LD/LLN0.SGCB.CnfEdit"
+        assert args[2] == FC_SE
+
+    def test_creates_boolean_true_mms_value(self) -> None:
+        client, lib = self._make_client(0)
+        client.confirm_edit_sg("LD/LLN0.SGCB")
+        lib.MmsValue_newBoolean.assert_called_once_with(True)
+
+    def test_raises_on_error(self) -> None:
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+
+        client, _ = self._make_client(21)
+        with pytest.raises(MmsDirectoryError):
+            client.confirm_edit_sg("LD/LLN0.SGCB")
+
+
+class TestSessionSgcbServices:
+    """Iec61850MmsSession SGCB methods delegate to MmsClient."""
+
+    @pytest.fixture
+    def session_with_client(self):  # type: ignore[no-untyped-def]
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        safety = MagicMock(spec=SafetyContext)
+        mock_client = MagicMock()
+        return Iec61850MmsSession(device=device, safety=safety, client=mock_client)
+
+    def test_get_sgcb_values_delegates(self, session_with_client) -> None:
+        from protoskipper_iec61850._mms_client import SgcbValues
+
+        expected = SgcbValues(num_of_sgs=3, act_sg=1)
+        session_with_client._client.get_sgcb_values.return_value = expected
+        result = session_with_client.get_sgcb_values("simpleIO/LLN0.SGCB")
+        session_with_client._client.get_sgcb_values.assert_called_once_with("simpleIO/LLN0.SGCB")
+        assert result == expected
+
+    def test_select_active_sg_delegates(self, session_with_client) -> None:
+        session_with_client.select_active_sg("simpleIO/LLN0.SGCB", 2)
+        session_with_client._client.select_active_sg.assert_called_once_with(
+            "simpleIO/LLN0.SGCB", 2
+        )
+
+    def test_select_edit_sg_delegates(self, session_with_client) -> None:
+        session_with_client.select_edit_sg("simpleIO/LLN0.SGCB", 1)
+        session_with_client._client.select_edit_sg.assert_called_once_with("simpleIO/LLN0.SGCB", 1)
+
+    def test_confirm_edit_sg_delegates(self, session_with_client) -> None:
+        session_with_client.confirm_edit_sg("simpleIO/LLN0.SGCB")
+        session_with_client._client.confirm_edit_sg.assert_called_once_with("simpleIO/LLN0.SGCB")
+
+    def test_no_client_raises_for_all_sgcb_methods(self) -> None:
+        from unittest.mock import MagicMock
+
+        from protoskipper_iec61850._mms_client import MmsDirectoryError
+        from protoskipper_iec61850.driver import Iec61850MmsSession
+
+        from protoskipper.core.driver import DeviceRef, SafetyContext
+
+        device = DeviceRef(protocol="iec61850.mms", address="10.0.0.1:102")
+        session = Iec61850MmsSession(device=device, safety=MagicMock(spec=SafetyContext))
+        with pytest.raises(MmsDirectoryError):
+            session.get_sgcb_values("LD/LLN0.SGCB")
+        with pytest.raises(MmsDirectoryError):
+            session.select_active_sg("LD/LLN0.SGCB", 1)
+        with pytest.raises(MmsDirectoryError):
+            session.select_edit_sg("LD/LLN0.SGCB", 1)
+        with pytest.raises(MmsDirectoryError):
+            session.confirm_edit_sg("LD/LLN0.SGCB")
