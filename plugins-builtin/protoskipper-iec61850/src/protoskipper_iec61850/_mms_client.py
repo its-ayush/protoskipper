@@ -727,11 +727,16 @@ class MmsClient:
         self._con = con
 
         # Read negotiated max PDU size from the MMS connection layer.
-        try:
-            mms_con = lib.IedConnection_getMmsConnection(con)
-            self._pdu_size = lib.MmsConnection_getMaxPduSize(mms_con)
-        except Exception:
-            _log.debug("Could not read negotiated PDU size", exc_info=True)
+        # MmsConnection_getMaxPduSize is absent in older pyiec61850 bindings;
+        # fall back to 0 (unlimited) rather than crashing.
+        get_pdu_size = getattr(lib, "MmsConnection_getMaxPduSize", None)
+        if get_pdu_size is not None:
+            try:
+                mms_con = lib.IedConnection_getMmsConnection(con)
+                self._pdu_size = get_pdu_size(mms_con)
+            except Exception:
+                self._pdu_size = 0
+        else:
             self._pdu_size = 0
 
         _log.debug(

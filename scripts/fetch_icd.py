@@ -72,92 +72,89 @@ def _fetch_one(host: str, port: int, timeout_ms: int, out_dir: Path) -> None:
     print(f"\n{'=' * 60}")
     print(f"Connecting to {host}:{port} …")
 
-    client = MmsClient(host, port, connect_timeout_ms=timeout_ms)
-    try:
-        client.connect()
-    except MmsConnectError as exc:
-        print(f"  CONNECT FAILED: {exc}")
-        return
-    except ImportError as exc:
-        print(f"  ERROR: {exc}")
-        sys.exit(1)
-
-    print(f"  Connected (PDU size={client.negotiated_pdu_size})")
-
     ied_dir = out_dir / host
     ied_dir.mkdir(parents=True, exist_ok=True)
 
     # remote_path -> size
     found_files: dict[str, int] = {}
 
-    with client:
-        # Try GetServerDirectory to show logical device structure
-        try:
-            logical_devices = client.get_server_directory()
-            print(f"  Logical devices: {logical_devices}")
-        except MmsDirectoryError as exc:
-            print(f"  GetServerDirectory failed (non-fatal): {exc}")
+    try:
+        with MmsClient(host, port, connect_timeout_ms=timeout_ms) as client:
+            print(f"  Connected (PDU size={client.negotiated_pdu_size})")
 
-        # Probe each candidate directory
-        seen_dirs: set[str] = set()
-        dirs_to_visit = list(_DIRECTORIES_TO_PROBE)
-
-        while dirs_to_visit:
-            d = dirs_to_visit.pop(0)
-            if d in seen_dirs:
-                continue
-            seen_dirs.add(d)
-
+            # Try GetServerDirectory to show logical device structure
             try:
-                entries = client.list_files(d)
+                logical_devices = client.get_server_directory()
+                print(f"  Logical devices: {logical_devices}")
             except MmsDirectoryError as exc:
-                _log.debug("list_files(%r) on %s: %s", d, host, exc)
-                continue
+                print(f"  GetServerDirectory failed (non-fatal): {exc}")
 
-            for entry in entries:
-                name = entry.name
-                suffix = Path(name).suffix.lower()
-                if suffix in _ICD_EXTENSIONS:
-                    # The name returned by the IED is already the full path
-                    # or just the filename; build the full remote path.
-                    if d and not name.startswith("/") and not name.startswith(d):
-                        sep = "" if d.endswith("/") else "/"
-                        remote_path = f"{d}{sep}{name}"
+            # Probe each candidate directory
+            seen_dirs: set[str] = set()
+            dirs_to_visit = list(_DIRECTORIES_TO_PROBE)
+
+            while dirs_to_visit:
+                d = dirs_to_visit.pop(0)
+                if d in seen_dirs:
+                    continue
+                seen_dirs.add(d)
+
+                try:
+                    entries = client.list_files(d)
+                except MmsDirectoryError as exc:
+                    _log.debug("list_files(%r) on %s: %s", d, host, exc)
+                    continue
+
+                for entry in entries:
+                    name = entry.name
+                    suffix = Path(name).suffix.lower()
+                    if suffix in _ICD_EXTENSIONS:
+                        # The name returned by the IED is already the full path
+                        # or just the filename; build the full remote path.
+                        if d and not name.startswith("/") and not name.startswith(d):
+                            sep = "" if d.endswith("/") else "/"
+                            remote_path = f"{d}{sep}{name}"
+                        else:
+                            remote_path = name
+                        found_files[remote_path] = entry.size
+                    elif not suffix:
+                        # Might be a subdirectory — add to visit list
+                        candidate = name.rstrip("/")
+                        if candidate not in seen_dirs and "/" not in candidate:
+                            dirs_to_visit.append(candidate)
+
+            if not found_files:
+                print("  No ICD/CID/SCD files found in root or standard directories.")
+                # Print full directory listing for manual inspection
+                try:
+                    all_entries = client.list_files("")
+                    if all_entries:
+                        print("  Root directory contents:")
+                        for e in all_entries:
+                            print(f"    {e.name!r:40s}  {e.size:>10} bytes")
                     else:
-                        remote_path = name
-                    found_files[remote_path] = entry.size
-                elif not suffix:
-                    # Might be a subdirectory — add to visit list
-                    candidate = name.rstrip("/")
-                    if candidate not in seen_dirs and "/" not in candidate:
-                        dirs_to_visit.append(candidate)
+                        print("  Root directory is empty.")
+                except MmsDirectoryError as exc:
+                    print(f"  Cannot list root: {exc}")
+                return
 
-        if not found_files:
-            print("  No ICD/CID/SCD files found in root or standard directories.")
-            # Print full directory listing for manual inspection
-            try:
-                all_entries = client.list_files("")
-                if all_entries:
-                    print("  Root directory contents:")
-                    for e in all_entries:
-                        print(f"    {e.name!r:40s}  {e.size:>10} bytes")
-                else:
-                    print("  Root directory is empty.")
-            except MmsDirectoryError as exc:
-                print(f"  Cannot list root: {exc}")
-            return
+            # Download found files
+            for remote_path, size in found_files.items():
+                local_name = Path(remote_path).name
+                local_path = ied_dir / local_name
+                print(f"  Downloading {remote_path!r} ({size} bytes) …", end=" ")
+                try:
+                    data = client.get_file(remote_path)
+                    local_path.write_bytes(data)
+                    print(f"saved → {local_path}")
+                except MmsDirectoryError as exc:
+                    print(f"FAILED: {exc}")
 
-        # Download found files
-        for remote_path, size in found_files.items():
-            local_name = Path(remote_path).name
-            local_path = ied_dir / local_name
-            print(f"  Downloading {remote_path!r} ({size} bytes) …", end=" ")
-            try:
-                data = client.get_file(remote_path)
-                local_path.write_bytes(data)
-                print(f"saved → {local_path}")
-            except MmsDirectoryError as exc:
-                print(f"FAILED: {exc}")
+    except MmsConnectError as exc:
+        print(f"  CONNECT FAILED: {exc}")
+    except ImportError as exc:
+        print(f"  ERROR: {exc}")
+        sys.exit(1)
 
 
 def main(argv: list[str] | None = None) -> int:
